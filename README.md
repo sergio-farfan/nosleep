@@ -4,6 +4,10 @@ A lightweight macOS menu bar utility that prevents your Mac from sleeping. Wraps
 
 No Dock icon. No main window. Just a cup icon in your menu bar.
 
+<p align="center">
+  <img src="assets/screenshot1.png" alt="NoSleep menu bar dropdown" width="300">
+</p>
+
 ## Features
 
 - **One-click toggle** — start/stop caffeinate from the menu bar
