@@ -1,0 +1,14 @@
+# Build artifacts
+.build/
+*.app/
+
+# macOS
+.DS_Store
+
+# Claude Code (local dev config)
+.claude/
+CLAUDE.md
+
+# SPM
+.swiftpm/
+Package.resolved
