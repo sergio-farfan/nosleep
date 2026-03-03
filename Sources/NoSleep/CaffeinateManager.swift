@@ -25,6 +25,7 @@ enum SleepDuration: Int, CaseIterable, Identifiable, Sendable {
     case oneHour    = 3600
     case twoHours   = 7200
     case fourHours  = 14400
+    case eightHours = 28800
     case tenHours   = 36000
     case indefinite = 0
 
@@ -37,6 +38,7 @@ enum SleepDuration: Int, CaseIterable, Identifiable, Sendable {
         case .oneHour:    "1 hour"
         case .twoHours:   "2 hours"
         case .fourHours:  "4 hours"
+        case .eightHours: "8 hours"
         case .tenHours:   "10 hours"
         case .indefinite: "Indefinite"
         }
