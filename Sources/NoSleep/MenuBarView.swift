@@ -98,7 +98,6 @@ struct MenuBarView: View {
         }
         .padding(.vertical, 8)
         .frame(width: 220)
-        .onAppear { manager.notifications.requestAuthorization() }
     }
 
     /// A small filled circle rendered as a non-template NSImage so it keeps its

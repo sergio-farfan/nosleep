@@ -82,6 +82,7 @@ final class CaffeinateManager: ObservableObject {
         let saved = UserDefaults.standard.integer(forKey: "selectedDuration")
         self.selectedDuration = SleepDuration(rawValue: saved) ?? .fourHours
         notifications.onExtend = { [weak self] in self?.extendOneHour() }
+        notifications.requestAuthorization()
     }
 
     var formattedRemaining: String {
