@@ -73,10 +73,15 @@ final class CaffeinateManager: ObservableObject {
 
     private var process: Process?
     private var timer: Timer?
+    private var stoppedByUser = false
+    private var runToken = 0
+    private var activeDuration: SleepDuration?
+    let notifications = NotificationManager()
 
     init() {
         let saved = UserDefaults.standard.integer(forKey: "selectedDuration")
         self.selectedDuration = SleepDuration(rawValue: saved) ?? .fourHours
+        notifications.onExtend = { [weak self] in self?.extendOneHour() }
     }
 
     var formattedRemaining: String {
@@ -97,6 +102,10 @@ final class CaffeinateManager: ObservableObject {
     func start() {
         stop()
 
+        runToken += 1
+        let token = runToken
+        stoppedByUser = false
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
 
@@ -108,10 +117,11 @@ final class CaffeinateManager: ObservableObject {
             remainingSeconds = 0
         }
         proc.arguments = args
+        activeDuration = selectedDuration
 
         proc.terminationHandler = { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.handleTermination()
+                self?.handleTermination(token: token)
             }
         }
 
@@ -134,6 +144,7 @@ final class CaffeinateManager: ObservableObject {
     }
 
     func stop() {
+        stoppedByUser = true
         timer?.invalidate()
         timer = nil
         if let proc = process, proc.isRunning {
@@ -150,9 +161,12 @@ final class CaffeinateManager: ObservableObject {
 
     func changeDuration(_ duration: SleepDuration) {
         selectedDuration = duration
-        if isActive {
-            start()
-        }
+        start()
+    }
+
+    func extendOneHour() {
+        selectedDuration = .oneHour
+        start()
     }
 
     func cleanup() {
@@ -168,11 +182,28 @@ final class CaffeinateManager: ObservableObject {
         }
     }
 
-    private func handleTermination() {
+    private func handleTermination(token: Int) {
+        // Ignore stale terminations from a session that was already replaced.
+        guard token == runToken else { return }
+
+        let completed = activeDuration
+        let notifiable = Self.shouldNotifyOnCompletion(
+            terminatedToken: token,
+            currentToken: runToken,
+            stoppedByUser: stoppedByUser,
+            duration: completed
+        )
+
         timer?.invalidate()
         timer = nil
         process = nil
         isActive = false
         remainingSeconds = 0
+        stoppedByUser = false
+        activeDuration = nil
+
+        if notifiable, let completed {
+            notifications.postCompletion(duration: completed)
+        }
     }
 }
