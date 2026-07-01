@@ -2,6 +2,10 @@
 .build/
 *.app/
 
+# Distribution
+*.dmg
+assets/AppIcon.iconset/
+
 # macOS
 .DS_Store
 

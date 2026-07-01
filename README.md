@@ -8,6 +8,35 @@ No Dock icon. No main window. Just a cup icon in your menu bar.
   <img src="assets/screenshot1.png" alt="NoSleep menu bar dropdown" width="300">
 </p>
 
+## Installation
+
+### Option 1 — Download the DMG (recommended)
+
+1. Download `NoSleep-<version>.dmg` from the [Releases](../../releases) page.
+2. Open the DMG and drag **NoSleep** onto the **Applications** folder.
+3. **First launch only** — NoSleep is ad-hoc signed (not notarized by Apple), so macOS
+   Gatekeeper blocks it until you approve it once. Either:
+   - Clear the download quarantine in Terminal:
+     ```bash
+     xattr -dr com.apple.quarantine /Applications/NoSleep.app
+     ```
+   - **or** try to open it, then go to **System Settings → Privacy & Security** and click
+     **Open Anyway**.
+
+Launch NoSleep from Applications — a cup icon (☕) appears in your menu bar.
+
+### Option 2 — Build from source
+
+Requires macOS 14+, Xcode Command Line Tools (`xcode-select --install`), and Swift 6+.
+
+```bash
+./build.sh              # compile universal binary, bundle, ad-hoc sign → NoSleep.app
+open NoSleep.app        # run it — cup icon appears in the menu bar
+./install.sh            # optional: copy to ~/Applications
+```
+
+See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-applications-optional) below for details.
+
 ## Features
 
 - **One-click toggle** — start/stop caffeinate from the menu bar
@@ -56,6 +85,19 @@ The icon changes to a filled cup when active.
 
 Copies `NoSleep.app` to `~/Applications/` and updates the LaunchAgent path if Start at Login is enabled.
 
+## Package a DMG (for releases)
+
+```bash
+./make-icons.sh      # only when the icon/background art changes — generates assets/AppIcon.icns
+./build.sh           # builds the universal (Apple Silicon + Intel) NoSleep.app
+./package-dmg.sh     # produces NoSleep-<version>.dmg
+```
+
+`package-dmg.sh` builds a styled disk image (app on the left, an arrow to the
+**Applications** drop-target, custom background and volume icon). The version in the DMG
+name is read from the app's `Info.plist`. macOS may prompt to let your terminal control
+Finder the first time — this is required for the DMG window layout.
+
 ## Uninstall
 
 ```bash
@@ -80,8 +122,16 @@ nosleep/
 │       ├── MenuBarView.swift      # Dropdown menu UI
 │       ├── CaffeinateManager.swift # caffeinate process + countdown
 │       └── LoginItemManager.swift  # LaunchAgent plist management
-├── build.sh                       # Build + bundle + code sign
-├── install.sh                     # Install to /Applications
+├── scripts/
+│   └── generate-art.swift         # AppKit renderer for icon + DMG background
+├── assets/
+│   ├── AppIcon.icns               # App icon (generated)
+│   ├── AppIcon.png                # 1024px icon master (generated)
+│   └── dmg-background*.png        # DMG window background (generated)
+├── build.sh                       # Build universal binary + bundle + code sign
+├── make-icons.sh                  # Regenerate icon/background art
+├── package-dmg.sh                 # Build styled NoSleep-<version>.dmg
+├── install.sh                     # Install to ~/Applications
 └── README.md
 ```
 
