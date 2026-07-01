@@ -55,6 +55,22 @@ final class CaffeinateManager: ObservableObject {
         }
     }
 
+    /// Pure decision: should a natural process termination fire a "session
+    /// complete" notification? True only when the terminated run is still the
+    /// current one (not a restart), the user didn't press Stop, and the session
+    /// was a timed (non-indefinite) duration.
+    nonisolated static func shouldNotifyOnCompletion(
+        terminatedToken: Int,
+        currentToken: Int,
+        stoppedByUser: Bool,
+        duration: SleepDuration?
+    ) -> Bool {
+        guard terminatedToken == currentToken else { return false }
+        guard !stoppedByUser else { return false }
+        guard let duration, duration != .indefinite else { return false }
+        return true
+    }
+
     private var process: Process?
     private var timer: Timer?
 
