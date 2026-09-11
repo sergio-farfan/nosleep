@@ -22,6 +22,33 @@ import Observation
 import os
 import ServiceManagement
 
+// MARK: - Service seam
+
+/// The Background Task Management operations `LoginItemManager` performs.
+/// Abstracted so the toggle and migration decision trees — the code that
+/// deletes ~/Library/LaunchAgents/com.nosleep.app.plist and (un)registers the
+/// login item — run under `swift test` against a scripted fake. A real
+/// `SMAppService` would register login items on the developer's machine.
+@MainActor
+protocol LoginItemService {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+    func legacyStatus(at url: URL) -> SMAppService.Status
+    func openSystemSettingsLoginItems()
+}
+
+/// Production service: `SMAppService.mainApp` plus the class-level helpers.
+struct SMAppServiceAdapter: LoginItemService {
+    var status: SMAppService.Status { SMAppService.mainApp.status }
+    func register() throws { try SMAppService.mainApp.register() }
+    func unregister() throws { try SMAppService.mainApp.unregister() }
+    func legacyStatus(at url: URL) -> SMAppService.Status { SMAppService.statusForLegacyPlist(at: url) }
+    func openSystemSettingsLoginItems() { SMAppService.openSystemSettingsLoginItems() }
+}
+
+// MARK: - Manager
+
 /// "Start at Login" backed by `SMAppService.mainApp` (macOS 13+).
 ///
 /// Background Task Management tracks the app by bundle identity, so the login
@@ -36,8 +63,11 @@ final class LoginItemManager {
     nonisolated private static let log = Logger(subsystem: "com.nosleep.app", category: "login-item")
 
     /// Plist written by NoSleep ≤ 1.1.0.
-    nonisolated static let legacyPlistURL = FileManager.default.homeDirectoryForCurrentUser
+    nonisolated static let defaultLegacyPlistURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/LaunchAgents/com.nosleep.app.plist")
+
+    nonisolated static let moveToApplicationsHint = "Move NoSleep to Applications, then quit and reopen it"
+    nonisolated static let approvalHint = "Allow NoSleep in System Settings › Login Items"
 
     /// Authoritative state from Background Task Management — what System
     /// Settings shows. Refreshed at launch, every time the menu opens, and
@@ -45,35 +75,57 @@ final class LoginItemManager {
     /// relaunching.
     private(set) var status: SMAppService.Status = .notRegistered
 
-    /// True while the ≤ 1.1.0 LaunchAgent is still on disk and launchd will run
-    /// it at login (migration could not hand it to SMAppService yet). Folded into
-    /// `isEnabled` so the toggle shows the real autostart state and can turn it off.
+    /// True while the ≤ 1.1.0 LaunchAgent is still on disk, points at a binary
+    /// that exists, and launchd will run it at login (migration could not hand
+    /// it to SMAppService yet). Folded into `isEnabled` so the toggle shows the
+    /// real autostart state and can turn it off.
     private(set) var legacyJobEnabled = false
 
-    /// Why the last toggle() had no effect; nil once one succeeds.
+    /// Why the last toggle() had no effect; cleared when the observed state
+    /// changes (e.g. the user fixed things in System Settings).
     private(set) var lastError: String?
 
     /// False from a mounted DMG, a Gatekeeper-translocated copy or a bare
     /// binary — none of those exist at next login. Fixed for the process lifetime.
-    let canRegister = LoginItemManager.isInstallableLocation(Bundle.main.bundleURL)
+    let canRegister: Bool
 
     /// True only when something will actually launch NoSleep at login.
-    /// `.requiresApproval` means the item is registered but the user switched it
-    /// off under System Settings › Login Items; that shows as unchecked plus a hint.
+    /// `.requiresApproval` means the item is registered but needs the user's
+    /// consent in System Settings; that shows as unchecked plus a hint unless
+    /// the legacy job still covers autostart in the meantime.
     var isEnabled: Bool { status == .enabled || legacyJobEnabled }
     var requiresApproval: Bool { status == .requiresApproval }
 
     /// One-line caption shown under the toggle when it cannot simply be flipped.
     var hint: String? {
-        if !canRegister && !isEnabled { return "Move NoSleep to Applications to enable" }
-        if requiresApproval && !legacyJobEnabled { return "Allow NoSleep in System Settings › Login Items" }
+        if !canRegister && !isEnabled { return Self.moveToApplicationsHint }
+        // Either the user switched the item off, or register() succeeded but
+        // Background Task Management still wants consent (the legacy job keeps
+        // Start at Login working meanwhile). Both need the same click.
+        if requiresApproval { return Self.approvalHint }
         return lastError
     }
 
-    @ObservationIgnored private let service = SMAppService.mainApp
+    @ObservationIgnored private let service: any LoginItemService
+    @ObservationIgnored private let legacyPlistURL: URL
+    @ObservationIgnored private let bundleURL: URL
+    @ObservationIgnored private let executableURL: URL?
+    @ObservationIgnored private let homeDirectory: URL
     @ObservationIgnored private var menuObserver: NSObjectProtocol?
 
-    init() {
+    init(service: any LoginItemService = SMAppServiceAdapter(),
+         legacyPlistURL: URL = LoginItemManager.defaultLegacyPlistURL,
+         bundleURL: URL = Bundle.main.bundleURL,
+         executableURL: URL? = Bundle.main.executableURL,
+         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+         isReadOnlyVolume: (URL) -> Bool? = { try? $0.resourceValues(forKeys: [.volumeIsReadOnlyKey]).volumeIsReadOnly }) {
+        self.service = service
+        self.legacyPlistURL = legacyPlistURL
+        self.bundleURL = bundleURL
+        self.executableURL = executableURL
+        self.homeDirectory = homeDirectory
+        self.canRegister = Self.isInstallableLocation(bundleURL, isReadOnlyVolume: isReadOnlyVolume)
+
         migrateLegacyPlistIfNeeded()
         refresh()
         // The .menu-style MenuBarExtra is an NSMenu: re-read BTM state each time
@@ -88,47 +140,56 @@ final class LoginItemManager {
     }
 
     func refresh() {
+        let before = (status, legacyJobEnabled)
         status = service.status
-        legacyJobEnabled = FileManager.default.fileExists(atPath: Self.legacyPlistURL.path)
-            && SMAppService.statusForLegacyPlist(at: Self.legacyPlistURL) == .enabled
+        legacyJobEnabled = legacyJobIsLive()
+        if before != (status, legacyJobEnabled) {
+            // The world moved on (System Settings, another launch); a caption
+            // about an earlier failed click would now contradict the checkbox.
+            lastError = nil
+        }
     }
 
     func openSystemSettings() {
-        SMAppService.openSystemSettingsLoginItems()
+        service.openSystemSettingsLoginItems()
     }
 
     func toggle() {
         lastError = nil
         refresh()
         if requiresApproval && !legacyJobEnabled {
-            // Registered, but the user turned NoSleep off in System Settings.
-            // register() cannot override that and unregister() would silently
-            // drop the item; only the user can flip the switch, so take them there.
+            // Registered, but Background Task Management wants the user's
+            // consent (or they turned NoSleep off there). register() cannot
+            // override that and unregister() would silently drop the item;
+            // only the user can flip the switch, so take them there.
             openSystemSettings()
             return
         }
+        var failure: String?
         do {
             if isEnabled {
-                // An explicit "off" is authoritative over both mechanisms.
-                if legacyJobEnabled {
-                    try FileManager.default.removeItem(at: Self.legacyPlistURL)
+                // An explicit "off" is authoritative over both mechanisms, and
+                // also cleans up a stale plist whose binary no longer exists.
+                if FileManager.default.fileExists(atPath: legacyPlistURL.path) {
+                    try FileManager.default.removeItem(at: legacyPlistURL)
                 }
                 if status == .enabled || status == .requiresApproval {
                     try service.unregister()
                 }
             } else {
                 guard canRegister else {
-                    Self.log.error("refusing to register login item from \(Bundle.main.bundleURL.path, privacy: .public); move NoSleep to Applications first")
-                    lastError = "Move NoSleep to Applications to enable"
+                    Self.log.error("refusing to register login item from \(self.bundleURL.path, privacy: .public); move NoSleep to Applications first")
+                    lastError = Self.moveToApplicationsHint
                     return
                 }
                 try service.register()
             }
         } catch {
             Self.log.error("login item \(self.isEnabled ? "disable" : "enable", privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            lastError = error.localizedDescription
+            failure = error.localizedDescription
         }
         refresh()
+        if let failure { lastError = failure }
         if requiresApproval {
             // register() succeeded but Background Task Management wants the
             // user's consent; send them to the switch.
@@ -173,6 +234,31 @@ final class LoginItemManager {
         return false
     }
 
+    /// What `migrateLegacyPlistIfNeeded()` does once both BTM states are known.
+    enum LegacyMigrationStep: Equatable {
+        /// The legacy agent was switched off in Login Items; "off" carries over.
+        case dropPlistUserDisabledIt
+        /// The main-app item is registered but awaits consent; the legacy job is
+        /// the only thing still launching the app, so it must survive.
+        case keepPlistAwaitingApproval
+        /// Nothing registered yet.
+        case register
+        /// The main-app item is already enabled.
+        case dropPlistMigrated
+    }
+
+    /// `.requiresApproval` on the main-app item is *not* evidence about the
+    /// legacy job: SMAppService.h documents it both for "registered, user must
+    /// act in System Settings" and for a revoked consent. Only the legacy
+    /// plist's own status can say the user turned that job off.
+    nonisolated static func legacyMigrationStep(legacyStatus: SMAppService.Status,
+                                                mainAppStatus: SMAppService.Status) -> LegacyMigrationStep {
+        if legacyStatus == .requiresApproval { return .dropPlistUserDisabledIt }
+        if mainAppStatus == .enabled { return .dropPlistMigrated }
+        if mainAppStatus == .requiresApproval { return .keepPlistAwaitingApproval }
+        return .register
+    }
+
     /// `ProgramArguments[0]` of a legacy LaunchAgent plist, if readable.
     nonisolated static func legacyProgramPath(at url: URL) -> String? {
         guard let data = try? Data(contentsOf: url),
@@ -181,7 +267,20 @@ final class LoginItemManager {
         return args.first
     }
 
-    // MARK: - Migration
+    // MARK: - Legacy LaunchAgent
+
+    /// `statusForLegacyPlist(at:)` reflects Background Task Management's
+    /// disposition for the file, not whether launchd can actually run it; the
+    /// ≤ 1.1.0 plist bakes in an absolute path, so also require that binary to
+    /// exist before claiming the job will launch anything.
+    private func legacyJobIsLive() -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: legacyPlistURL.path) else { return false }
+        guard let program = Self.legacyProgramPath(at: legacyPlistURL), fm.fileExists(atPath: program) else {
+            return false
+        }
+        return service.legacyStatus(at: legacyPlistURL) == .enabled
+    }
 
     /// A legacy plist means the user had "Start at Login" on in ≤ 1.1.0 — unless
     /// they later switched the agent off under System Settings › Login Items,
@@ -189,38 +288,45 @@ final class LoginItemManager {
     /// it as `.requiresApproval`. Carry that choice over: "on" becomes an
     /// SMAppService registration, "off" stays unregistered. The plist is deleted
     /// only once the carried-over state is in effect, so the preference is never
-    /// lost: if registration cannot happen here, the plist stays and the next
-    /// launch from an installed copy retries.
+    /// lost: if registration cannot happen here, or the new item still awaits
+    /// the user's approval, the plist stays and a later launch retries.
     ///
     /// Deliberately no `launchctl bootout`: if this very process was started by
     /// that job, booting it out would terminate NoSleep. The loaded job is
     /// harmless for the rest of this login session (KeepAlive was false) and
     /// cannot load again without its plist.
     private func migrateLegacyPlistIfNeeded() {
-        let url = Self.legacyPlistURL
+        let url = legacyPlistURL
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         guard canRegister else { return }
-        guard Self.mayMigrateLegacyPlist(bundleURL: Bundle.main.bundleURL,
-                                         executableURL: Bundle.main.executableURL,
+        guard Self.mayMigrateLegacyPlist(bundleURL: bundleURL,
+                                         executableURL: executableURL,
                                          legacyProgramPath: Self.legacyProgramPath(at: url),
-                                         homeDirectory: FileManager.default.homeDirectoryForCurrentUser) else {
-            Self.log.info("legacy LaunchAgent kept: this copy (\(Bundle.main.bundleURL.path, privacy: .public)) is not the installed one")
+                                         homeDirectory: homeDirectory) else {
+            Self.log.info("legacy LaunchAgent kept: this copy (\(self.bundleURL.path, privacy: .public)) is not the installed one")
             return
         }
         do {
-            let legacyStatus = SMAppService.statusForLegacyPlist(at: url)
-            if legacyStatus == .requiresApproval || service.status == .requiresApproval {
-                // The user turned NoSleep off in Login Items; "off" carries over.
+            switch Self.legacyMigrationStep(legacyStatus: service.legacyStatus(at: url),
+                                            mainAppStatus: service.status) {
+            case .dropPlistUserDisabledIt:
                 try FileManager.default.removeItem(at: url)
                 Self.log.info("removed legacy LaunchAgent the user had disabled; Start at Login stays off")
                 return
-            }
-            if service.status != .enabled {
-                try service.register()
-            }
-            guard service.status == .enabled else {
-                Self.log.info("legacy LaunchAgent kept: SMAppService status is \(String(describing: self.service.status), privacy: .public)")
+            case .keepPlistAwaitingApproval:
+                // Do not call register() again: it would throw
+                // kSMErrorAlreadyRegistered / kSMErrorLaunchDeniedByUser. The
+                // menu shows the approval hint; toggle() opens System Settings.
+                Self.log.info("legacy LaunchAgent kept: SMAppService item awaits approval in Login Items")
                 return
+            case .register:
+                try service.register()
+                guard service.status == .enabled else {
+                    Self.log.info("legacy LaunchAgent kept: SMAppService status is \(String(describing: self.service.status), privacy: .public)")
+                    return
+                }
+            case .dropPlistMigrated:
+                break
             }
             try FileManager.default.removeItem(at: url)
             Self.log.info("migrated legacy LaunchAgent plist to SMAppService")

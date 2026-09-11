@@ -40,7 +40,7 @@ See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-ap
 ## Features
 
 - **One-click toggle** — start/stop caffeinate from the menu bar
-- **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 10 hr, or Indefinite
+- **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 8 hr, 10 hr, or Indefinite
 - **Live countdown** — shows remaining time while active
 - **Start at Login** — registers NoSleep as a login item (System Settings › General › Login Items)
 - **Prevents display + idle sleep** — uses `caffeinate -d -i`
@@ -72,7 +72,7 @@ A cup icon (☕) appears in your menu bar. Click it to see the menu:
 
 - **Start/Stop** — toggle caffeinate on or off
 - **Duration** — pick how long to keep your Mac awake
-- **Start at Login** — enable to launch NoSleep automatically on boot
+- **Start at Login** — enable to launch NoSleep automatically when you log in
 - **Quit** — stop caffeinate and exit the app
 
 The icon changes to a filled cup when active.
