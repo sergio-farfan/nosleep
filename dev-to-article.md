@@ -4,7 +4,9 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 
 ![NoSleep menu bar dropdown](https://raw.githubusercontent.com/sergio-farfan/nosleep/dd59c6e/assets/screenshot1.png)
 
-> **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with a one-tap **Extend 1 hour** when a timed session ends. The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-auto-activate-completion-alerts-and-a-real-download) below.
+> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, and the test suite went from 5 to 64. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-64-tests) below.
+>
+> **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with a one-tap **Extend 1 hour** when a timed session ends. The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-autoactivate-completion-alerts-and-a-real-download) below.
 
 ---
 
@@ -26,6 +28,8 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 - **Swift 6.0** with strict concurrency
 - **SwiftUI** + `MenuBarExtra` (macOS 13+)
 - **UserNotifications** — for the session-complete alert and its Extend action
+- **Observation** (`@Observable`) — replaced `ObservableObject` in 1.2.0
+- **ServiceManagement** (`SMAppService`) — Start at Login since 1.2.0
 - **Swift Package Manager** — no Xcode project file required; ships a **universal binary**
 - Minimum target: **macOS 14 (Sonoma)**
 
@@ -130,7 +134,7 @@ The selected duration is persisted in `UserDefaults` so the preference survives 
 
 ## Login Item: LaunchAgent Plist
 
-> **Correction (v1.2.0):** this section describes NoSleep ≤ 1.1.0. `SMAppService` does **not** require a sandboxed app — that was my mistake — and the plist approach below broke silently whenever the bundle moved (the path is baked in at enable time) and reported "enabled" purely from the file's existence. Since 1.2.0 NoSleep uses `SMAppService.mainApp`, reads the real Background Task Management status, and migrates an existing plist on first launch.
+> **Correction (v1.2.0):** this section describes NoSleep ≤ 1.1.0. `SMAppService` does **not** require a sandboxed app — that was my mistake — and the plist approach below broke silently whenever the bundle moved (the path is baked in at enable time) and reported "enabled" purely from the file's existence. Since 1.2.0 NoSleep uses `SMAppService.mainApp`, reads the real Background Task Management status, and carries an existing plist's setting over when launched from an installed copy — see [Start at Login, done properly](#start-at-login-done-properly) below.
 
 NoSleep 1.1.0 wrote a `LaunchAgent` plist directly to `~/Library/LaunchAgents/`:
 
@@ -225,9 +229,120 @@ xattr -dr com.apple.quarantine /Applications/NoSleep.app
 
 ---
 
+## v1.2.0: Eight Bugs, a Login Item Rewrite, and 64 Tests
+
+Before this release I ran an automated, multi-agent code review over the whole repository: ten lens-specific reviewers, every bug and medium-severity finding checked by three adversarial verifiers (reproduce / skeptic / impact) and lower-severity items by one, then two further verification passes over the fixes themselves. It found more than I expected in about 500 lines of app Swift plus the scripts around it. The snippets earlier in this article show the 1.1.0 code; here is what changed and why.
+
+### The default that was secretly "Indefinite"
+
+```swift
+let saved = UserDefaults.standard.integer(forKey: "selectedDuration")
+self.selectedDuration = SleepDuration(rawValue: saved) ?? .fourHours
+```
+
+Looks fine. But `integer(forKey:)` returns `0` for a missing key, and `0` is the raw value of `.indefinite`. So the fallback never ran, and every fresh install started with **Indefinite** selected — the one preset with no timer and no completion notification. The fix reads the raw object and decides in a pure, unit-tested function:
+
+```swift
+nonisolated static func restoredDuration(from stored: Int?) -> SleepDuration {
+    guard let stored, let saved = SleepDuration(rawValue: stored) else { return .fourHours }
+    return saved
+}
+// in init:  restoredDuration(from: defaults.object(forKey: key) as? Int)
+```
+
+### The child that outlived its parent
+
+`caffeinate` is a child process. If NoSleep crashed, was force-quit, or got `kill`ed, macOS did **not** kill the child — it was reparented to launchd and kept the Mac awake with no UI attached (forever, for Indefinite). `caffeinate` has a flag for exactly this, and it composes with `-t`:
+
+```swift
+var args = ["-d", "-i", "-w", "\(ProcessInfo.processInfo.processIdentifier)"]
+```
+
+`-w <pid>` releases the assertion and exits as soon as that process is gone.
+
+### The countdown that froze while you looked at it
+
+`Timer.scheduledTimer` registers in the run loop's `.default` mode. While an `NSMenu` is open, the main run loop runs in `NSEventTrackingRunLoopMode` — where `.default`-mode timers never fire. So the "live countdown" stood still exactly while the menu was open. Worse, each tick *decremented* a counter, so every second spent looking at the menu went uncounted, and for the rest of the session the display showed more time than actually remained — caffeinate's `-t` timer expired while the menu still showed minutes left.
+
+Two changes: add the timer in `.common` mode, and derive the value from a deadline instead of counting down:
+
+```swift
+let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+    MainActor.assumeIsolated { self?.tick() }
+}
+RunLoop.main.add(t, forMode: .common)
+
+func tick() {
+    remainingSeconds = max(0, Int((deadlineUptime - uptime()).rounded(.up)))
+    // …
+}
+```
+
+The deadline is on `ProcessInfo.systemUptime`, the same clock family `caffeinate -t` uses, so both pause together during system sleep. There is a test for this that puts the main run loop into a tracking-style common mode and checks the countdown still moves; reverting to `.default` fails it.
+
+### Two percent CPU for nothing
+
+That 1 Hz tick wrote an `@Published` property on the app-root `@StateObject`. Every write fired `objectWillChange`, which invalidated the whole `MenuBarExtra` scene, which re-set the status bar button's image, laid it out, committed to WindowServer and re-snapshotted the item for both appearances — about 20 ms of main-thread work per second — the review measured roughly 2 % CPU with the menu *closed*, for a glyph that had not changed.
+
+Migrating to the Observation framework fixed it with almost no code:
+
+```swift
+@MainActor @Observable
+final class CaffeinateManager {
+    var isActive = false
+    private(set) var remainingSeconds = 0
+    // …
+}
+
+// NoSleepApp:  @State private var caffeinateManager = CaffeinateManager()
+```
+
+`@Observable` tracks *which properties* each view read. The menu-bar label only reads `isActive`, so `remainingSeconds` ticking away no longer touches it. In the same measurement the same tick under `@Observable` cost about 0.1 %.
+
+### The crash outside an .app bundle
+
+`UNUserNotificationCenter.current()` raises `bundleProxyForCurrentProcess is nil` and aborts the process unless you are running from a real `.app`. `CaffeinateManager.init()` called it — so `swift run` died instantly, and no unit test could construct the manager. Only the pure notify-decision function had tests; the state machine the whole app depends on had none.
+
+The fix: guard on `Bundle.main.bundleURL.pathExtension == "app"`, and give the manager three injectable seams — a launcher (`CaffeinateLaunching`), a notification poster (`NotificationPosting`) and a store (`DurationStore`). With fakes for all three, the whole start / stop / restart / termination machine runs under `swift test` without spawning a process or touching `UserDefaults`.
+
+### The stale Extend button
+
+Delivered notifications sit in Notification Center indefinitely. A "Your 2 hours session has ended" banner from the morning still had a live **Extend 1 hour** button at 4 pm — and tapping it replaced whatever session was running with a one-hour one. Now every `stop()` (which every restart goes through) clears delivered notifications, and `extendOneHour()` ignores the action while a session is active.
+
+### "Session has ended" — no, it was killed
+
+The termination handler treated every exit the same, so `killall caffeinate` produced a cheerful completion notification. The launcher now reads the exit reason and only a clean exit counts as expiry:
+
+```swift
+proc.terminationHandler = { p in
+    let clean = p.terminationReason == .exit && p.terminationStatus == 0
+    Task { @MainActor in onTermination(clean) }
+}
+```
+
+There is also a test that runs the real launcher against `/usr/bin/true`, `/usr/bin/false` and a `terminate()`d `sleep`, so the mapping itself is covered — not just the code that consumes it.
+
+### Start at Login, done properly
+
+The LaunchAgent approach I described above was wrong twice. `SMAppService` never required a sandbox. And baking `Bundle.main.executablePath` into a plist meant the login item broke silently the moment the app moved — say, from the mounted DMG to Applications — while the toggle stayed checked because the file still existed.
+
+1.2.0 uses `SMAppService.mainApp`. The toggle reflects the real Background Task Management status, refreshed every time the menu opens; if the item needs your approval a caption says so, and clicking the toggle takes you to System Settings › Login Items instead of trying to re-register. An existing 1.1.0 plist is migrated when the app is launched from an installed copy. If the old agent was still on, the plist is only deleted once the new registration is actually `.enabled` — while it awaits your approval the plist stays and a later launch finishes the job. If you had already switched the old agent off under Login Items, the plist is removed without registering anything, so "off" carries over. Either way nobody loses the setting on upgrade. The migration decision is a pure function with its own tests, because the first version of it had a bug the review's second pass caught: it treated "registered, awaiting approval" as "the user turned it off".
+
+### Packaging, too
+
+The DMG script assumed its image would mount at `/Volumes/NoSleep`; with a NoSleep DMG already open it mounted at `/Volumes/NoSleep 1` and the script ejected the wrong disk. It now refuses to run while a NoSleep volume is already mounted, reads the device node back from `hdiutil attach` so it can only ever detach its own image, retries `detach` while Finder still holds the volume, and ships a multi-resolution TIFF background so Retina displays get the sharp version. The app icon no longer includes 16 and 32 px representations, which current macOS (verified on 27) draws shrunk on a grey plate.
+
+### Tests: 5 → 64
+
+Every Swift fix above except the Observation migration has a test that fails if the fix is reverted (the packaging changes are shell scripts and assets, outside the test target): the pure decisions, the state machine through fakes, the real launcher's exit mapping, the run-loop-mode test, a deadline-resync test with an injected clock (two ticks inside one second must not double-decrement; one tick after a 65 s stall must jump to the right value), and the login-item migration against a scripted fake and a temp plist.
+
+The lesson I am taking from this release: the bugs were not in the clever part (the run-token race from 1.1.0 held up fine). They were in the boring parts — a default value, a run-loop mode, a child process nobody waits for — and none of them were reachable by tests until the class could be constructed outside an `.app`.
+
+---
+
 ## Build & Install
 
-**Easiest:** download `NoSleep-<version>.dmg` from the [latest release](https://github.com/sergio-farfan/nosleep/releases), open it, and drag **NoSleep** onto Applications. On first launch, run the `xattr` command above (or right-click → Open) once.
+**Easiest:** download `NoSleep-<version>.dmg` from the [latest release](https://github.com/sergio-farfan/nosleep/releases), open it, and drag **NoSleep** onto Applications. On first launch, run the `xattr` command above once (or open it, then **System Settings → Privacy & Security → Open Anyway**).
 
 **From source** — the project uses Swift Package Manager, no `.xcodeproj` needed:
 
@@ -245,7 +360,7 @@ open NoSleep.app
 ./install.sh
 ```
 
-Requirements to build: Swift 6.0+, Xcode Command Line Tools, macOS 14+.
+Requirements to build: Swift 6.0+, Xcode Command Line Tools (full Xcode for `swift test`), macOS 14+.
 
 ---
 
