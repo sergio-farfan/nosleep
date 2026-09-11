@@ -19,8 +19,8 @@
 import SwiftUI
 
 struct MenuBarView: View {
-    @ObservedObject var manager: CaffeinateManager
-    @ObservedObject var loginManager: LoginItemManager
+    var manager: CaffeinateManager
+    var loginManager: LoginItemManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -78,13 +78,22 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Start at Login
+            // Start at Login — state comes from Background Task Management (what
+            // System Settings shows), not from a file the app wrote.
             Toggle("Start at Login", isOn: Binding(
                 get: { loginManager.isEnabled },
                 set: { _ in loginManager.toggle() }
             ))
+            .disabled(!loginManager.canRegister && !loginManager.isEnabled)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
+            if let hint = loginManager.hint {
+                // Non-interactive, so the native menu renders it as a grey caption.
+                Text(hint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+            }
 
             Divider()
 

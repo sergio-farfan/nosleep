@@ -33,7 +33,14 @@ let glyphColor      = NSColor.white
 let bgTopColor      = NSColor(srgbRed: 0.97, green: 0.96, blue: 0.94, alpha: 1)
 let bgBottomColor   = NSColor(srgbRed: 0.90, green: 0.87, blue: 0.83, alpha: 1)
 
-let outputDir = "assets"
+// Resolve relative to this script's location (<repo>/scripts/generate-art.swift →
+// <repo>/assets) so the output lands in the right place no matter what the
+// current directory is; a cwd-relative "assets" wrote into whatever directory
+// the script happened to be run from.
+let outputDir = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()      // scripts/
+    .deletingLastPathComponent()      // <repo>/
+    .appendingPathComponent("assets").path
 
 // MARK: - Drawing helpers
 

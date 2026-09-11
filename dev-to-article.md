@@ -16,7 +16,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 - **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 8 hr, 10 hr, or Indefinite
 - **Live countdown** — a green active dot and remaining time while active (e.g. `2h 34m`)
 - **Completion notification** — when a timed session ends, a notification offers a one-tap **Extend 1 hour**
-- **Start at Login** — optional LaunchAgent so it auto-starts on boot
+- **Start at Login** — registers a login item so it auto-starts when you log in (a LaunchAgent plist in ≤ 1.1.0, `SMAppService` since 1.2.0)
 - **Prevents display + idle sleep** — uses `caffeinate -d -i`
 
 ---
@@ -130,7 +130,9 @@ The selected duration is persisted in `UserDefaults` so the preference survives 
 
 ## Login Item: LaunchAgent Plist
 
-Rather than using `SMAppService` (which requires a sandboxed app), NoSleep writes a `LaunchAgent` plist directly to `~/Library/LaunchAgents/`:
+> **Correction (v1.2.0):** this section describes NoSleep ≤ 1.1.0. `SMAppService` does **not** require a sandboxed app — that was my mistake — and the plist approach below broke silently whenever the bundle moved (the path is baked in at enable time) and reported "enabled" purely from the file's existence. Since 1.2.0 NoSleep uses `SMAppService.mainApp`, reads the real Background Task Management status, and migrates an existing plist on first launch.
+
+NoSleep 1.1.0 wrote a `LaunchAgent` plist directly to `~/Library/LaunchAgents/`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>

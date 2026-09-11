@@ -19,9 +19,11 @@ mkdir -p "$ICONSET"
 gen() {
     sips -z "$1" "$1" "$MASTER" --out "${ICONSET}/$2" >/dev/null
 }
-gen 16   icon_16x16.png
-gen 32   icon_16x16@2x.png
-gen 32   icon_32x32.png
+# Intentionally NO 16x16 / 16x16@2x / 32x32 representations. On macOS 26+
+# IconServices draws any legacy .icns that carries <=32 px reps shrunk on a grey
+# "legacy" plate at 16/32 pt (Finder list/column view, Open panels, sidebar,
+# Login Items). Without them it derives those sizes from the 64 px rep with no
+# plate; macOS 14/15 simply downsample the 64 px rep as before.
 gen 64   icon_32x32@2x.png
 gen 128  icon_128x128.png
 gen 256  icon_128x128@2x.png

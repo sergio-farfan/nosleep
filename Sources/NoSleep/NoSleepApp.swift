@@ -20,8 +20,8 @@ import SwiftUI
 
 @main
 struct NoSleepApp: App {
-    @StateObject private var caffeinateManager = CaffeinateManager()
-    @StateObject private var loginManager = LoginItemManager()
+    @State private var caffeinateManager = CaffeinateManager()
+    @State private var loginManager = LoginItemManager()
 
     var body: some Scene {
         MenuBarExtra {

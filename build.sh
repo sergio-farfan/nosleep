@@ -7,6 +7,12 @@ cd "$SCRIPT_DIR"
 APP_NAME="NoSleep"
 APP_BUNDLE="${APP_NAME}.app"
 BUNDLE_ID="com.nosleep.app"
+# Single source of truth for the bundle version (package-dmg.sh reads it back
+# from Info.plist). 1.2.0: Start at Login moved from a LaunchAgent plist to
+# SMAppService with migration, 4-hour first-run default, -w orphan protection,
+# drift-free countdown; README/install.sh call "≤ 1.1.0" the LaunchAgent era.
+VERSION="1.2.0"
+MIN_MACOS="14.0"   # keep in sync with Package.swift platforms .macOS(.v14)
 ARCH_FLAGS="--arch arm64 --arch x86_64"
 
 echo "==> Building ${APP_NAME} (release, universal)…"
@@ -29,30 +35,30 @@ else
 fi
 
 # Write Info.plist — LSUIElement hides Dock icon
-cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
+cat > "${APP_BUNDLE}/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>NoSleep</string>
+    <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
-    <string>com.nosleep.app</string>
+    <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
-    <string>NoSleep</string>
+    <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
-    <string>NoSleep</string>
+    <string>${APP_NAME}</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleVersion</key>
-    <string>1.1.0</string>
+    <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.0</string>
+    <string>${VERSION}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>${MIN_MACOS}</string>
     <key>LSUIElement</key>
     <true/>
 </dict>

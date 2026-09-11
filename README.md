@@ -42,7 +42,7 @@ See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-ap
 - **One-click toggle** — start/stop caffeinate from the menu bar
 - **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 10 hr, or Indefinite
 - **Live countdown** — shows remaining time while active
-- **Start at Login** — optional LaunchAgent for auto-start
+- **Start at Login** — registers NoSleep as a login item (System Settings › General › Login Items)
 - **Prevents display + idle sleep** — uses `caffeinate -d -i`
 
 ## Requirements
@@ -83,7 +83,7 @@ The icon changes to a filled cup when active.
 ./install.sh
 ```
 
-Copies `NoSleep.app` to `~/Applications/` and updates the LaunchAgent path if Start at Login is enabled.
+Quits any running copy, installs `NoSleep.app` into `~/Applications/`, and relaunches it if it was running. If a LaunchAgent plist from NoSleep ≤ 1.1.0 is present its path is updated too; the app migrates it to a login item on first launch.
 
 ## Package a DMG (for releases)
 
@@ -100,11 +100,16 @@ Finder the first time — this is required for the DMG window layout.
 
 ## Uninstall
 
-```bash
-# Remove the app
-rm -rf ~/Applications/NoSleep.app
+1. Turn off **Start at Login** first — in the NoSleep menu, or under
+   **System Settings › General › Login Items**. The login item is tied to the app
+   bundle, so removing the app first leaves a dangling entry there.
+2. Quit NoSleep, then:
 
-# Remove the LaunchAgent (if enabled)
+```bash
+# Remove the app (DMG installs live in /Applications, install.sh uses ~/Applications)
+rm -rf /Applications/NoSleep.app ~/Applications/NoSleep.app
+
+# Remove a LaunchAgent left over from NoSleep ≤ 1.1.0, if any
 rm -f ~/Library/LaunchAgents/com.nosleep.app.plist
 
 # Remove saved preferences
@@ -121,7 +126,8 @@ nosleep/
 │       ├── NoSleepApp.swift       # App entry point, MenuBarExtra
 │       ├── MenuBarView.swift      # Dropdown menu UI
 │       ├── CaffeinateManager.swift # caffeinate process + countdown
-│       └── LoginItemManager.swift  # LaunchAgent plist management
+│       ├── LoginItemManager.swift  # Start at Login via SMAppService
+│       └── NotificationManager.swift # Session-ended notification + Extend action
 ├── scripts/
 │   └── generate-art.swift         # AppKit renderer for icon + DMG background
 ├── assets/
@@ -141,8 +147,9 @@ NoSleep spawns `/usr/bin/caffeinate` as a child process with flags:
 - `-d` — prevent the display from sleeping
 - `-i` — prevent the system from idle sleeping
 - `-t <seconds>` — auto-stop after the selected duration (omitted for Indefinite)
+- `-w <NoSleep pid>` — caffeinate exits on its own if NoSleep exits for any reason (crash, Force Quit, `kill`), so it is never left running without the app
 
-When you quit NoSleep or click Stop, the caffeinate process is terminated. If caffeinate's timer expires naturally, the app detects this and updates its state.
+When you quit NoSleep or click Stop, the caffeinate process is terminated. If caffeinate's timer expires naturally, the app detects this, updates its state, and posts a notification with an **Extend 1 hour** action.
 
 ## License
 
