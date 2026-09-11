@@ -4,7 +4,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 
 ![NoSleep menu bar dropdown](https://raw.githubusercontent.com/sergio-farfan/nosleep/dd59c6e/assets/screenshot1.png)
 
-> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, and the test suite went from 5 to 64. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-64-tests) below.
+> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, and the test suite went from 5 to 64. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-64-tests) below. Download: [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) (universal, macOS 14+).
 >
 > **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with a one-tap **Extend 1 hour** when a timed session ends. The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-autoactivate-completion-alerts-and-a-real-download) below.
 
@@ -337,6 +337,8 @@ The DMG script assumed its image would mount at `/Volumes/NoSleep`; with a NoSle
 Every Swift fix above except the Observation migration has a test that fails if the fix is reverted (the packaging changes are shell scripts and assets, outside the test target): the pure decisions, the state machine through fakes, the real launcher's exit mapping, the run-loop-mode test, a deadline-resync test with an injected clock (two ticks inside one second must not double-decrement; one tick after a 65 s stall must jump to the right value), and the login-item migration against a scripted fake and a temp plist.
 
 The lesson I am taking from this release: the bugs were not in the clever part (the run-token race from 1.1.0 held up fine). They were in the boring parts — a default value, a run-loop mode, a child process nobody waits for — and none of them were reachable by tests until the class could be constructed outside an `.app`.
+
+**Download:** [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) — universal (Apple Silicon + Intel), macOS 14+. Open it, drag **NoSleep** onto Applications, and do the one-time Gatekeeper step in [Build & Install](#build-install) below. Upgrading from 1.1.0 just means replacing the app; your Start at Login setting is carried over.
 
 ---
 
