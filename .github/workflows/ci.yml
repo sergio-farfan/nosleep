@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    name: Build, test, bundle and package (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      - name: Bundle app (universal release, ad-hoc signed)
+        run: ./build.sh
+
+      - name: Verify bundle
+        run: |
+          set -euo pipefail
+          plist=NoSleep.app/Contents/Info.plist
+          echo "version: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")"
+          echo "bundle id: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")"
+          lipo -archs NoSleep.app/Contents/MacOS/NoSleep | grep -q 'x86_64 arm64\|arm64 x86_64'
+          codesign --verify --strict NoSleep.app
+          test -f NoSleep.app/Contents/Resources/AppIcon.icns
+          test -f NoSleep.app/Contents/Resources/LICENSE
+
+      # A headless runner has no Finder session, so the AppleScript layout step
+      # times out and is skipped by design; the image is still built, mounted,
+      # given its volume icon, detached and compressed, which is what we verify.
+      - name: Package DMG
+        run: ./package-dmg.sh
+
+      - name: Verify DMG
+        run: |
+          set -euo pipefail
+          dmg=$(ls NoSleep-*.dmg)
+          hdiutil verify "$dmg"
+          mount=$(hdiutil attach -readonly -nobrowse -noautoopen "$dmg" | grep -o '/Volumes/.*' | head -n1)
+          ls -la "$mount"
+          test -d "$mount/NoSleep.app"
+          test -L "$mount/Applications"
+          test -f "$mount/.VolumeIcon.icns"
+          test -f "$mount/.fseventsd/no_log"
+          hdiutil detach "$mount"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: NoSleep-dmg
+          path: NoSleep-*.dmg
+          if-no-files-found: error
+
+  shellcheck:
+    name: Lint shell scripts
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install shellcheck
+        run: brew install shellcheck
+      - name: shellcheck
+        run: shellcheck -S warning build.sh install.sh make-icons.sh package-dmg.sh

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Swift 6, SwiftUI, `UserNotifications`, SPM, XCTest.
 
+> **Status:** Completed and shipped in v1.1.0 (see commit `7dbf7e8`). Kept as the implementation record. Details that differ in the code today are listed in the [design spec's status note](../specs/2026-07-01-menu-activation-and-notifications-design.md); in particular the verification steps below that use a bare `pgrep caffeinate` should use `for p in $(pgrep -x NoSleep); do pgrep -P "$p" -x caffeinate; done` to isolate NoSleep's own child from other tools' caffeinate processes.
+
 ## Global Constraints
 
 - macOS 14+ (`LSMinimumSystemVersion` 14.0); Swift tools 6.0 / Swift 6 language mode.

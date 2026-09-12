@@ -39,9 +39,22 @@ protocol NotificationPosting: AnyObject {
 final class NotificationManager: NSObject, NotificationPosting, UNUserNotificationCenterDelegate {
     nonisolated private static let log = Logger(subsystem: "com.nosleep.app", category: "notifications")
 
-    private let categoryID = "SESSION_COMPLETE"
-    private let extendActionID = "EXTEND_1H"
+    nonisolated static let categoryID = "SESSION_COMPLETE"
+    nonisolated static let extendActionID = "EXTEND_1H"
     private var didConfigure = false
+
+    /// Title and body of the "session complete" banner. The banner already
+    /// shows the app name, so the title says what happened, and the body reads
+    /// naturally for every preset label (no "Your 2 hours session").
+    nonisolated static func completionContent(for duration: SleepDuration) -> (title: String, body: String) {
+        ("Session ended", "Kept your Mac awake for \(duration.label). It can sleep again.")
+    }
+
+    /// Whether a notification response should run the Extend action (as
+    /// opposed to the default tap or a dismissal).
+    nonisolated static func shouldExtend(actionIdentifier: String) -> Bool {
+        actionIdentifier == extendActionID
+    }
 
     /// `UNUserNotificationCenter.current()` traps ("bundleProxyForCurrentProcess
     /// is nil") unless the process runs from an .app bundle. `swift run`, the bare
@@ -65,10 +78,10 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
         let center = UNUserNotificationCenter.current()
         center.delegate = self
 
-        let extend = UNNotificationAction(identifier: extendActionID,
+        let extend = UNNotificationAction(identifier: Self.extendActionID,
                                           title: "Extend 1 hour",
                                           options: [])
-        let category = UNNotificationCategory(identifier: categoryID,
+        let category = UNNotificationCategory(identifier: Self.categoryID,
                                               actions: [extend],
                                               intentIdentifiers: [],
                                               options: [])
@@ -100,11 +113,10 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
         guard Self.isSupported else { return }
 
         let content = UNMutableNotificationContent()
-        // The banner already shows the app name, so the title says what happened
-        // and the body avoids "Your 2 hours session" grammar.
-        content.title = "Session ended"
-        content.body = "Kept your Mac awake for \(duration.label). It can sleep again."
-        content.categoryIdentifier = categoryID
+        let text = Self.completionContent(for: duration)
+        content.title = text.title
+        content.body = text.body
+        content.categoryIdentifier = Self.categoryID
         content.sound = .default
 
         let request = UNNotificationRequest(identifier: UUID().uuidString,
@@ -142,7 +154,7 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
     ) {
         let actionID = response.actionIdentifier
         Task { @MainActor [weak self] in
-            if actionID == self?.extendActionID { self?.onExtend?() }
+            if Self.shouldExtend(actionIdentifier: actionID) { self?.onExtend?() }
             completionHandler()
         }
     }

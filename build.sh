@@ -16,7 +16,9 @@ MIN_MACOS="14.0"   # keep in sync with Package.swift platforms .macOS(.v14)
 ARCH_FLAGS="--arch arm64 --arch x86_64"
 
 echo "==> Building ${APP_NAME} (release, universal)…"
+# shellcheck disable=SC2086  # ARCH_FLAGS is intentionally word-split into two --arch options
 swift build -c release $ARCH_FLAGS
+# shellcheck disable=SC2086
 BIN_DIR="$(swift build -c release $ARCH_FLAGS --show-bin-path)"
 
 echo "==> Creating ${APP_BUNDLE}…"
@@ -72,6 +74,8 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << PLIST
     <string>${MIN_MACOS}</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSUserNotificationAlertStyle</key>
+    <string>alert</string>
 </dict>
 </plist>
 PLIST

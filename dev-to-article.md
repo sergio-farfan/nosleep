@@ -6,7 +6,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 
 > **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, and the test suite went from 5 to 64. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-64-tests) below. Download: [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) (universal, macOS 14+).
 >
-> **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with a one-tap **Extend 1 hour** when a timed session ends. The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-autoactivate-completion-alerts-and-a-real-download) below.
+> **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with an **Extend 1 hour** action when a timed session ends (hover the notification to reveal the button; the *Alerts* style keeps it on screen until you do). The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-autoactivate-completion-alerts-and-a-real-download) below.
 
 ---
 
@@ -17,7 +17,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 - **Auto-activate** — pick a duration and it starts immediately, no extra click
 - **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 8 hr, 10 hr, or Indefinite
 - **Live countdown** — a green active dot and remaining time while active (e.g. `2h 34m`)
-- **Completion notification** — when a timed session ends, a notification offers a one-tap **Extend 1 hour**
+- **Completion notification** — when a timed session ends, a notification offers **Extend 1 hour** (hover the notification to reveal the button; the *Alerts* style keeps it on screen until you do)
 - **Start at Login** — registers a login item so it auto-starts when you log in (a LaunchAgent plist in ≤ 1.1.0, `SMAppService` since 1.2.0)
 - **Prevents display + idle sleep** — uses `caffeinate -d -i`
 

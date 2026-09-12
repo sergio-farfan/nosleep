@@ -1,6 +1,6 @@
 # NoSleep
 
-A lightweight macOS menu bar utility that prevents your Mac from sleeping. Wraps the built-in `caffeinate` command into a simple, toggleable status bar app.
+A lightweight macOS menu bar utility that keeps your Mac from going to sleep due to inactivity (idle sleep). Wraps the built-in `caffeinate` command into a simple, toggleable status bar app.
 
 No Dock icon. No main window. Just a cup icon in your menu bar.
 
@@ -27,7 +27,7 @@ Launch NoSleep from Applications — a cup icon (☕) appears in your menu bar.
 
 ### Option 2 — Build from source
 
-Requires macOS 14+, Xcode Command Line Tools (`xcode-select --install`), and Swift 6+.
+Requires macOS 14+, Xcode Command Line Tools (`xcode-select --install`), and Swift 6+. Running `swift test` needs full Xcode: the Command Line Tools alone ship no XCTest.
 
 ```bash
 ./build.sh              # compile universal binary, bundle, ad-hoc sign → NoSleep.app
@@ -46,12 +46,12 @@ See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-ap
 - **Completion notification** — when a timed session ends, a notification offers **Extend 1 hour**; the menu also shows when the last session ended
 - **Start at Login** — registers NoSleep as a login item (System Settings › General › Login Items)
 - **Activate on Launch** — optional: start the saved duration as soon as NoSleep launches
-- **Prevents display + idle sleep** — uses `caffeinate -d -i`
+- **Prevents idle display + idle system sleep** — uses `caffeinate -d -i` (see [Limitations](#limitations))
 
 ## Requirements
 
 - macOS 14 (Sonoma) or later
-- Xcode Command Line Tools (`xcode-select --install`)
+- Xcode Command Line Tools (`xcode-select --install`) — full Xcode for `swift test`
 - Swift 6.0+
 
 ## Build
@@ -76,7 +76,7 @@ A cup icon (☕) appears in your menu bar. Click it to see the menu:
 - **Status line** — `Inactive`, `Active — 2h 34m left`, or, after a timed session ran out, when it ended; clicking it toggles start/stop
 - **Start/Stop** — toggle caffeinate on or off
 - **Duration** — pick a preset; NoSleep starts (or restarts) immediately with it
-- **Start at Login** — launch NoSleep automatically when you log in
+- **Start at Login** — launch NoSleep automatically when you log in. macOS shows a one-time “Background Items Added” notice; the item lives under **System Settings › General › Login Items**, where you can also switch it off
 - **Activate on Launch** — also start a session with the saved duration on every launch (useful together with Start at Login)
 - **About NoSleep** — shows the installed version
 - **Quit** — stop caffeinate and exit the app
@@ -84,6 +84,10 @@ A cup icon (☕) appears in your menu bar. Click it to see the menu:
 The icon changes to a filled cup when active. When a timed session ends, a notification offers **Extend 1 hour**, which runs a fresh one-hour session without changing your saved duration.
 
 Only one copy of NoSleep runs at a time: launching a second copy (for example from the build directory while the installed one is running) exits immediately, and a newer build quits an older running one when it starts.
+
+### Notifications
+
+When a timed session ends, NoSleep posts a notification with an **Extend 1 hour** button. macOS shows notification buttons only when you hover the notification; with the *Banners* style it also disappears after a few seconds, and the button may sit under **Options**. New installs default to the persistent *Alerts* style, which stays on screen until you act. If you installed an earlier version, set **System Settings › Notifications › NoSleep › Alert style** to **Alerts** to get the same behaviour. If notifications are off, the menu shows an item that opens that pane.
 
 ## Install to ~/Applications (optional)
 
@@ -134,21 +138,30 @@ nosleep/
 ├── Package.swift                  # SPM config (macOS 14+, SwiftUI)
 ├── Sources/
 │   └── NoSleep/
-│       ├── NoSleepApp.swift       # App entry point, MenuBarExtra
-│       ├── MenuBarView.swift      # Dropdown menu UI
-│       ├── CaffeinateManager.swift # caffeinate process + countdown
+│       ├── NoSleepApp.swift       # App entry point, MenuBarExtra, single-instance lock
+│       ├── MenuBarView.swift      # Dropdown menu UI, About alert
+│       ├── CaffeinateManager.swift # caffeinate process, countdown, session state
 │       ├── LoginItemManager.swift  # Start at Login via SMAppService
 │       └── NotificationManager.swift # Session-ended notification + Extend action
+├── Tests/
+│   └── NoSleepTests/              # XCTest suite (state machine via fakes, launcher, login item, lock)
 ├── scripts/
 │   └── generate-art.swift         # AppKit renderer for icon + DMG background
 ├── assets/
 │   ├── AppIcon.icns               # App icon (generated)
 │   ├── AppIcon.png                # 1024px icon master (generated)
-│   └── dmg-background*.png        # DMG window background (generated)
+│   ├── dmg-background*.png        # DMG window background (generated)
+│   └── screenshot1.png            # README screenshot
+├── docs/
+│   ├── reviews/                   # Code review reports
+│   └── superpowers/               # Design spec + implementation plan (v1.1.0)
+├── .github/workflows/ci.yml       # Build, test, bundle, package and lint on pushes to main and PRs
 ├── build.sh                       # Build universal binary + bundle + code sign
 ├── make-icons.sh                  # Regenerate icon/background art
 ├── package-dmg.sh                 # Build styled NoSleep-<version>.dmg
 ├── install.sh                     # Install to ~/Applications
+├── dev-to-article.md              # Source of the dev.to article
+├── LICENSE                        # GPLv3
 └── README.md
 ```
 
@@ -161,6 +174,14 @@ NoSleep spawns `/usr/bin/caffeinate` as a child process with flags:
 - `-w <NoSleep pid>` — caffeinate exits on its own if NoSleep exits for any reason (crash, Force Quit, `kill`), so it is never left running without the app
 
 When you quit NoSleep or click Stop, the caffeinate process is terminated. If caffeinate's timer expires naturally, the app detects this, updates its state, and posts a notification with an **Extend 1 hour** action.
+
+Because the work is done by `caffeinate`, macOS attributes the sleep block to it: `pmset -g assertions` lists `caffeinate`, not NoSleep. To find the child NoSleep owns: `for p in $(pgrep -x NoSleep); do pgrep -P "$p" -x caffeinate; done` (tolerates NoSleep not running).
+
+## Limitations
+
+- **Only idle sleep is prevented.** Closing a MacBook's lid, choosing Apple menu › Sleep, pressing the power button, scheduled sleep and low-battery sleep still put the Mac to sleep while NoSleep is active. That is macOS policy for the `-d -i` assertions, not something NoSleep can override. To keep a closed MacBook running, use clamshell mode (external display, power, and a keyboard or mouse).
+- **Time spent asleep does not count.** Both caffeinate's timer and the countdown run on the system uptime clock, which pauses while the Mac sleeps: a 4-hour session interrupted by an hour of sleep ends five hours after it started. The countdown resynchronises on wake.
+- **The screen stays on.** `-d` also keeps the display awake, which holds off the idle screen saver and screen lock for the whole session. On battery, pick a short preset or lower the brightness.
 
 ## License
 

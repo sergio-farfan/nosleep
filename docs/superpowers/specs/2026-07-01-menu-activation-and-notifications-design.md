@@ -2,7 +2,10 @@
 
 **Date:** 2026-07-01
 **Author:** Sergio Farfan
-**Status:** Approved (pending spec review)
+**Status:** Shipped in v1.1.0. Kept as the design record; the following details differ from this design or changed later:
+
+- As shipped in 1.1.0, `requestAuthorization()` is called from `CaffeinateManager.init` (not from `NoSleepApp`), so the delegate is registered during launch; since 1.2.0 it is a no-op outside an `.app` bundle.
+- Since the post-1.2.0 improvements: the Indefinite status reads “Active — no time limit” (not ∞); **Extend 1 hour** runs a one-hour session *without* changing the saved duration, and the Duration menu checks the running session while one is active; the notification reads “Session ended / Kept your Mac awake for ‹duration›. It can sleep again.”; the Duration items are native checkmark items rather than dot glyphs; a natural expiry also leaves an in-menu cue (“Kept awake for ‹duration› — ended ‹time›”).
 
 ## Context
 
