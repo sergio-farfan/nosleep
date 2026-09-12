@@ -4,7 +4,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 
 ![NoSleep menu bar dropdown](https://raw.githubusercontent.com/sergio-farfan/nosleep/61b7b5a3e0c6d021656bc61f7ecd30a5a904690b/assets/screenshot1.png)
 
-> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, the menu got native checkmarks, an in-menu record of the last session, **Activate on Launch** and **About**, and the test suite went from 5 to 87. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-87-tests) below. Download: [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) (universal, macOS 14+).
+> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, the menu got native checkmarks, an in-menu record of the last session, **Activate on Launch** and **About**, and the test suite went from 5 to 87. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-87-tests) below. Download: [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) (universal, macOS 14+). The 1.2.0 DMG was rebuilt on 2026-09-12 to include the menu additions; both builds report 1.2.0, so if your menu has no **About NoSleep** item, download it again.
 >
 > **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with an **Extend 1 hour** action when a timed session ends (hover the notification to reveal the button; the *Alerts* style keeps it on screen until you do). The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-autoactivate-completion-alerts-and-a-real-download) below.
 
@@ -20,7 +20,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 - **Completion notification** — when a timed session ends, a notification offers **Extend 1 hour** (hover the notification to reveal the button; the *Alerts* style keeps it on screen until you do)
 - **Start at Login** — registers a login item so it auto-starts when you log in (a LaunchAgent plist in ≤ 1.1.0, `SMAppService` since 1.2.0)
 - **Activate on Launch** — optional: start the saved duration the moment NoSleep launches, so login-time protection needs no click
-- **Single instance** — launching a second copy exits immediately, and a newer build quits an older running one
+- **Single instance** — launching a second copy exits immediately, and a lock-aware build quits a still-running pre-lock copy (1.1.0, or the 1.2.0 DMG published before 2026-09-12) and its caffeinate, so an upgrade cannot leave two icons
 - **Prevents display + idle sleep** — uses `caffeinate -d -i`
 
 ---
@@ -336,16 +336,16 @@ The DMG script assumed its image would mount at `/Volumes/NoSleep`; with a NoSle
 
 ### The improvements that rode along
 
-The same review listed a second tier of things that were not bugs but were worth doing, and a second pass of the same automated process shipped them into 1.2.0 as well:
+The same review listed a second tier of things that were not bugs but were worth doing. A second pass of the same automated process landed them on 2026-09-12, two days after the first 1.2.0 build, and I rebuilt the 1.2.0 DMG rather than cut a new version — so if you downloaded it before then, download it again. Everything below came from the review except the About box, which I added on my own:
 
 - **Native checkmarks.** The duration presets are real menu toggles, so the selected one gets the system checkmark (and VoiceOver reads it), instead of SF Symbol dots that recent macOS stopped drawing in menus.
 - **The menu remembers.** When a timed session runs out, the status line shows an orange dot and "Kept awake for 2 hours — ended 14:32" until you start something new, so a missed notification no longer leaves you guessing. The wording gains the date once it is no longer today's.
 - **Activate on Launch.** An opt-in toggle that starts the saved duration as soon as the app launches — the missing half of Start at Login.
 - **About NoSleep.** Icon, name, tagline and the installed version, one click away.
 - **Extend keeps your preference.** "Extend 1 hour" runs a one-hour session without overwriting the duration you had picked; the checkmark follows the running session and snaps back afterwards.
-- **One instance.** A kernel file lock (`O_EXLOCK`) arbitrates between copies started by `open`, a login item and launchd within the same millisecond — my first attempt used `NSRunningApplication` and measurably raced, leaving zero or two instances. A lock-aware build also quits a still-running pre-lock build, so upgrading by dragging the DMG over the old app cannot leave two icons.
-- **Notifications.** The banner reads "Session ended / Kept your Mac awake for 2 hours. It can sleep again.", stays in Notification Center, and new installs get the persistent *Alerts* style so the Extend button is on screen. If you have denied notifications, the menu offers to open the right System Settings pane.
-- **Packaging.** The DMG finally ships its volume icon — Finder was deleting the file during the layout step, so it is now applied afterwards — plus a Retina background, Apple's 824-point icon grid, the GPL text inside the bundle, and proper `Info.plist` metadata.
+- **One instance.** A kernel file lock (`O_EXLOCK`) arbitrates between copies started by `open`, a login item and launchd within the same millisecond — my first attempt used `NSRunningApplication`, and the review's probes caught it racing: two copies started together left zero or two instances, because a directly exec'd copy is not registered with LaunchServices until `NSApplication` initialises and two LaunchServices-launched copies can each see the other and both exit. A lock-aware build also quits a still-running pre-lock build, so upgrading by dragging the DMG over the old app cannot leave two icons.
+- **Notifications.** The banner reads "Session ended / Kept your Mac awake for 2 hours. It can sleep again.", stays in Notification Center, and new installs get the persistent *Alerts* style, so the notification stays on screen until you act (hover it to reveal the Extend button). If you have denied notifications, the menu offers to open the right System Settings pane.
+- **Packaging.** The DMG finally ships its volume icon — Finder was deleting the file during the layout step, so it is now applied afterwards — plus Apple's 824-point icon grid, the GPL text inside the bundle, and proper `Info.plist` metadata.
 - **CI.** Every push to `main` now builds, runs the tests, produces the signed universal bundle, packages and verifies the DMG, and lints the shell scripts on a GitHub-hosted Mac.
 
 ### Tests: 5 → 87
@@ -354,7 +354,7 @@ Every Swift fix above except the Observation migration has a test that fails if 
 
 The lesson I am taking from this release: the bugs were not in the clever part (the run-token race from 1.1.0 held up fine). They were in the boring parts — a default value, a run-loop mode, a child process nobody waits for — and none of them were reachable by tests until the class could be constructed outside an `.app`.
 
-**Download:** [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) — universal (Apple Silicon + Intel), macOS 14+. Open it, drag **NoSleep** onto Applications, and do the one-time Gatekeeper step in [Build & Install](#build-install) below. Upgrading from 1.1.0 just means replacing the app; your Start at Login setting is carried over, and the new copy quits the old one for you.
+**Download:** [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) — universal (Apple Silicon + Intel), macOS 14+. Open it, drag **NoSleep** onto Applications, and do the one-time Gatekeeper step in [Build & Install](#build-install) below. Upgrading from 1.1.0 or from the earlier 1.2.0 build just means replacing the app; your Start at Login setting is carried over, and the new copy quits the old one for you.
 
 ---
 

@@ -83,7 +83,7 @@ A cup icon (☕) appears in your menu bar. Click it to see the menu:
 
 The icon changes to a filled cup when active. When a timed session ends, a notification offers **Extend 1 hour**, which runs a fresh one-hour session without changing your saved duration.
 
-Only one copy of NoSleep runs at a time: launching a second copy (for example from the build directory while the installed one is running) exits immediately, and a newer build quits an older running one when it starts.
+Only one copy of NoSleep runs at a time: launching a second copy (for example from the build directory while the installed one is running) exits immediately, and a lock-aware build quits a still-running pre-lock copy (1.1.0, or the 1.2.0 DMG published before 2026-09-12) when it starts.
 
 ### Notifications
 
