@@ -111,7 +111,8 @@ final class LoginItemManager {
     @ObservationIgnored private let bundleURL: URL
     @ObservationIgnored private let executableURL: URL?
     @ObservationIgnored private let homeDirectory: URL
-    @ObservationIgnored private var menuObserver: NSObjectProtocol?
+    // nonisolated(unsafe) so deinit (nonisolated) may read it to remove the observer.
+    @ObservationIgnored nonisolated(unsafe) private var menuObserver: NSObjectProtocol?
 
     init(service: any LoginItemService = SMAppServiceAdapter(),
          legacyPlistURL: URL = LoginItemManager.defaultLegacyPlistURL,
@@ -137,6 +138,10 @@ final class LoginItemManager {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+    }
+
+    deinit {
+        if let menuObserver { NotificationCenter.default.removeObserver(menuObserver) }
     }
 
     func refresh() {

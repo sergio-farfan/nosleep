@@ -40,9 +40,12 @@ See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-ap
 ## Features
 
 - **One-click toggle** — start/stop caffeinate from the menu bar
+- **Auto-activate** — picking a duration starts immediately; re-picking while active restarts with the new duration
 - **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 8 hr, 10 hr, or Indefinite
-- **Live countdown** — shows remaining time while active
+- **Live countdown** — a green dot and the remaining time in the menu while active (e.g. `2h 34m`)
+- **Completion notification** — when a timed session ends, a notification offers **Extend 1 hour**; the menu also shows when the last session ended
 - **Start at Login** — registers NoSleep as a login item (System Settings › General › Login Items)
+- **Activate on Launch** — optional: start the saved duration as soon as NoSleep launches
 - **Prevents display + idle sleep** — uses `caffeinate -d -i`
 
 ## Requirements
@@ -70,12 +73,17 @@ open NoSleep.app
 
 A cup icon (☕) appears in your menu bar. Click it to see the menu:
 
+- **Status line** — `Inactive`, `Active — 2h 34m left`, or, after a timed session ran out, when it ended; clicking it toggles start/stop
 - **Start/Stop** — toggle caffeinate on or off
-- **Duration** — pick how long to keep your Mac awake
-- **Start at Login** — enable to launch NoSleep automatically when you log in
+- **Duration** — pick a preset; NoSleep starts (or restarts) immediately with it
+- **Start at Login** — launch NoSleep automatically when you log in
+- **Activate on Launch** — also start a session with the saved duration on every launch (useful together with Start at Login)
+- **About NoSleep** — shows the installed version
 - **Quit** — stop caffeinate and exit the app
 
-The icon changes to a filled cup when active.
+The icon changes to a filled cup when active. When a timed session ends, a notification offers **Extend 1 hour**, which runs a fresh one-hour session without changing your saved duration.
+
+Only one copy of NoSleep runs at a time: launching a second copy (for example from the build directory while the installed one is running) exits immediately, and a newer build quits an older running one when it starts.
 
 ## Install to ~/Applications (optional)
 
@@ -114,6 +122,9 @@ rm -f ~/Library/LaunchAgents/com.nosleep.app.plist
 
 # Remove saved preferences
 defaults delete com.nosleep.app 2>/dev/null
+
+# Remove the single-instance lock
+rm -rf ~/Library/Application\ Support/NoSleep
 ```
 
 ## Project Structure

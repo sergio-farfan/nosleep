@@ -26,7 +26,11 @@ import UserNotifications
 protocol NotificationPosting: AnyObject {
     /// Invoked when the user taps the "Extend 1 hour" action.
     var onExtend: (() -> Void)? { get set }
+    /// Invoked with the latest answer to "has the user denied notifications?"
+    /// after every authorization request or refresh.
+    var onAuthorizationDenied: ((Bool) -> Void)? { get set }
     func requestAuthorization()
+    func refreshAuthorizationStatus()
     func postCompletion(duration: SleepDuration)
     func clearDelivered()
 }
@@ -47,6 +51,7 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
 
     /// Invoked when the user taps the "Extend 1 hour" action.
     var onExtend: (() -> Void)?
+    var onAuthorizationDenied: ((Bool) -> Void)?
 
     /// Call once at app launch. Registers the category + action, sets the
     /// delegate, and requests authorization. `CaffeinateManager.init` runs during
@@ -68,12 +73,25 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
                                               intentIdentifiers: [],
                                               options: [])
         center.setNotificationCategories([category])
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error {
-                Self.log.error("requestAuthorization failed: \(error.localizedDescription, privacy: .public)")
-            } else {
+
+        Task { @MainActor [weak self] in
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound])
                 Self.log.info("notification authorization granted=\(granted, privacy: .public)")
+            } catch {
+                Self.log.error("requestAuthorization failed: \(error.localizedDescription, privacy: .public)")
             }
+            self?.refreshAuthorizationStatus()
+        }
+    }
+
+    /// Re-read the authorization status and report whether the user has denied
+    /// notifications, so the menu can say why no session-ended alert will show.
+    func refreshAuthorizationStatus() {
+        guard Self.isSupported else { return }
+        Task { @MainActor [weak self] in
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            self?.onAuthorizationDenied?(settings.authorizationStatus == .denied)
         }
     }
 
@@ -82,8 +100,10 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
         guard Self.isSupported else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = "NoSleep"
-        content.body = "Your \(duration.label) session has ended."
+        // The banner already shows the app name, so the title says what happened
+        // and the body avoids "Your 2 hours session" grammar.
+        content.title = "Session ended"
+        content.body = "Kept your Mac awake for \(duration.label). It can sleep again."
         content.categoryIdentifier = categoryID
         content.sound = .default
 
@@ -105,13 +125,14 @@ final class NotificationManager: NSObject, NotificationPosting, UNUserNotificati
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
 
-    // Show the banner even though a menu-bar app is effectively always active.
+    // Show the banner even though a menu-bar app is effectively always active,
+    // and keep it in Notification Center (.list) so it can be found later.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler([.banner, .list, .sound])
     }
 
     nonisolated func userNotificationCenter(

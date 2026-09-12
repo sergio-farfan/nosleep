@@ -26,7 +26,12 @@ import XCTest
 /// trees run without touching Background Task Management on this machine.
 @MainActor
 final class FakeLoginItemService: LoginItemService {
-    var status: SMAppService.Status = .notRegistered
+    private var storedStatus: SMAppService.Status = .notRegistered
+    private(set) var statusReads = 0
+    var status: SMAppService.Status {
+        get { statusReads += 1; return storedStatus }
+        set { storedStatus = newValue }
+    }
     var legacyStatuses: [URL: SMAppService.Status] = [:]
     /// What `status` becomes after a successful register() (BTM may want consent).
     var statusAfterRegister: SMAppService.Status = .enabled
@@ -203,6 +208,21 @@ final class LoginItemManagerBehaviourTests: XCTestCase {
     }
 
     private var plistExists: Bool { FileManager.default.fileExists(atPath: plistURL.path) }
+
+    /// Mirror of the CaffeinateManager check: the menu-open observer must
+    /// capture the manager weakly, so it is deallocatable and a dead manager
+    /// does nothing when a menu opens.
+    func testManagerIsDeallocatableAndDeadManagerDoesNotRefresh() {
+        weak var weakManager: LoginItemManager?
+        do {
+            let m = makeManager(bundle: installed)
+            weakManager = m
+        }
+        XCTAssertNil(weakManager, "observer block must capture the manager weakly")
+        let readsBefore = service.statusReads
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
+        XCTAssertEqual(service.statusReads, readsBefore, "a dead manager must not refresh")
+    }
 
     private func makeManager(bundle: URL, readOnly: Bool = false) -> LoginItemManager {
         LoginItemManager(service: service,

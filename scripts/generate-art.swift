@@ -86,7 +86,10 @@ func drawAppIcon(size: Int) {
     NSGraphicsContext.current = ctx
 
     let s = CGFloat(size)
-    let margin = s * 0.06
+    // Apple's macOS icon grid: the squircle occupies 824 of the 1024 pt canvas
+    // (100 pt margin each side). A larger tile renders visibly oversized next
+    // to system icons in the Dock and Finder.
+    let margin = s * (100.0 / 1024.0)
     let rect = NSRect(x: margin, y: margin, width: s - 2 * margin, height: s - 2 * margin)
     let radius = rect.width * 0.2237 // Apple "squircle" corner ratio approximation
 
@@ -97,7 +100,8 @@ func drawAppIcon(size: Int) {
     NSGraphicsContext.restoreGraphicsState()
 
     // Centered white cup.and.saucer.fill glyph
-    let config = NSImage.SymbolConfiguration(pointSize: s * 0.5, weight: .regular)
+    // Keep the glyph's share of the (now smaller) tile the same as before.
+    let config = NSImage.SymbolConfiguration(pointSize: s * 0.46, weight: .regular)
         .applying(NSImage.SymbolConfiguration(paletteColors: [glyphColor]))
     if let symbol = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: nil)?
         .withSymbolConfiguration(config) {

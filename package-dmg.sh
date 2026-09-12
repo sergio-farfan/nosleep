@@ -104,7 +104,11 @@ elif [ -f "$BACKGROUND" ]; then
     cp "$BACKGROUND" "$STAGING/.background/background.png"
     BG_FILE="background.png"
 fi
-[ -f "$ICON" ] && cp "$ICON" "$STAGING/.VolumeIcon.icns"
+# (The volume icon is added AFTER the Finder layout step below: Finder deletes
+# a root .VolumeIcon.icns and rewrites the root FinderInfo while it lays out
+# the window, so anything placed here would not survive.)
+# Keep the build machine's file-system event log out of the shipped image.
+mkdir -p "$STAGING/.fseventsd" && touch "$STAGING/.fseventsd/no_log"
 
 echo "==> Creating writable image…"
 rm -f "$DMG_TMP" "$DMG_FINAL"
@@ -137,7 +141,9 @@ tell application "Finder"
         set current view of container window to icon view
         set toolbar visible of container window to false
         set statusbar visible of container window to false
-        set the bounds of container window to {200, 120, 800, 520}
+        -- 600x428 window so the CONTENT area (below the ~28 px title bar) is
+        -- 600x400, the size of the background image.
+        set the bounds of container window to {200, 120, 800, 548}
         set theViewOptions to the icon view options of container window
         set arrangement of theViewOptions to not arranged
         set icon size of theViewOptions to 128
@@ -170,9 +176,19 @@ pkill -P "$WATCHER" 2>/dev/null || true
 kill "$WATCHER" 2>/dev/null || true
 OSA_PID=""; WATCHER=""
 
-# Volume icon (best effort — layout/background still work without it)
-if [ -f "$STAGING/.VolumeIcon.icns" ] && command -v SetFile >/dev/null 2>&1; then
-    SetFile -a C "$MOUNT_DIR" || true
+# Volume icon (best effort — layout/background still work without it). Must
+# come after the Finder step, which removes a pre-existing .VolumeIcon.icns and
+# resets the root FinderInfo (verified on macOS 27). Set the kHasCustomIcon flag
+# by writing FinderInfo directly; SetFile is deprecated and missing without full
+# Xcode, and this is exactly what it wrote.
+if [ -f "$ICON" ]; then
+    if cp "$ICON" "$MOUNT_DIR/.VolumeIcon.icns" \
+        && xattr -wx com.apple.FinderInfo \
+            0000000000000000040000000000000000000000000000000000000000000000 "$MOUNT_DIR"; then
+        echo "    Volume icon set."
+    else
+        echo "    Warning: could not set the volume icon." >&2
+    fi
 fi
 
 sync

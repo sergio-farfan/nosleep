@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import Observation
 import XCTest
 @testable import NoSleep
 
@@ -58,11 +59,14 @@ final class FakeLauncher: CaffeinateLaunching {
 @MainActor
 final class SpyNotifications: NotificationPosting {
     var onExtend: (() -> Void)?
+    var onAuthorizationDenied: ((Bool) -> Void)?
     private(set) var requestCount = 0
+    private(set) var refreshCount = 0
     private(set) var posted: [SleepDuration] = []
     private(set) var clearCount = 0
 
     func requestAuthorization() { requestCount += 1 }
+    func refreshAuthorizationStatus() { refreshCount += 1 }
     func postCompletion(duration: SleepDuration) { posted.append(duration) }
     func clearDelivered() { clearCount += 1 }
 }
@@ -179,6 +183,26 @@ final class CaffeinateManagerPureTests: XCTestCase {
         XCTAssertEqual(CaffeinateManager.format(seconds: 3661), "1h 1m")
         XCTAssertEqual(CaffeinateManager.format(seconds: 28799), "7h 59m")
     }
+
+    // EndedSession
+
+    /// Exact strings built from the same formatting API on captured dates, so
+    /// the oracle is locale-independent and catches any style change.
+    func testEndedSessionSummaryReadsNaturally() {
+        let now = Date.now
+        XCTAssertEqual(EndedSession(duration: .oneHour, endedAt: now).summary(now: now),
+                       "Kept awake for 1 hour — ended \(now.formatted(date: .omitted, time: .shortened))")
+
+        let twoDaysAgo = Calendar.current.date(byAdding: .day, value: -2, to: now)!
+        XCTAssertEqual(EndedSession(duration: .twoHours, endedAt: twoDaysAgo).summary(now: now),
+                       "Kept awake for 2 hours — ended \(twoDaysAgo.formatted(date: .abbreviated, time: .shortened))")
+
+        // The very same expiry, looked at the next day, must carry its date too:
+        // "today" is decided when the text is read, not when the session ended.
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: now)!
+        XCTAssertEqual(EndedSession(duration: .oneHour, endedAt: now).summary(now: tomorrow),
+                       "Kept awake for 1 hour — ended \(now.formatted(date: .abbreviated, time: .shortened))")
+    }
 }
 
 // MARK: - State machine (no real caffeinate spawned, no cfprefsd traffic)
@@ -191,6 +215,8 @@ final class CaffeinateManagerStateTests: XCTestCase {
 
     // Async overrides may take the class's @MainActor isolation; the synchronous
     // XCTestCase.setUp/tearDown are nonisolated and would warn on every access.
+    private var managers: [CaffeinateManager] = []
+
     override func setUp() async throws {
         try await super.setUp()
         store = InMemoryStore()
@@ -198,15 +224,25 @@ final class CaffeinateManagerStateTests: XCTestCase {
         spy = SpyNotifications()
     }
 
-    private func makeManager() -> CaffeinateManager {
-        CaffeinateManager(launcher: launcher, notifications: spy, defaults: store)
+    /// Stop every manager so no repeating `.common`-mode timer outlives its test.
+    override func tearDown() async throws {
+        managers.forEach { $0.stop() }
+        managers = []
+        try await super.tearDown()
     }
 
-    func testInitWiresExtendActionAndRequestsAuthorizationOnce() {
+    private func makeManager() -> CaffeinateManager {
+        let m = CaffeinateManager(launcher: launcher, notifications: spy, defaults: store)
+        managers.append(m)
+        return m
+    }
+
+    func testInitWiresCallbacksAndRequestsAuthorizationOnce() {
         let m = makeManager()
         XCTAssertFalse(m.isActive)
         XCTAssertEqual(spy.requestCount, 1)
         XCTAssertNotNil(spy.onExtend, "Extend action must be wired to the manager")
+        XCTAssertNotNil(spy.onAuthorizationDenied, "authorization status must be wired to the manager")
     }
 
     /// The real NotificationManager must be inert outside an .app bundle. The
@@ -220,6 +256,7 @@ final class CaffeinateManagerStateTests: XCTestCase {
         }
         let real = NotificationManager()
         real.requestAuthorization()          // would trap without the guard
+        real.refreshAuthorizationStatus()
         real.postCompletion(duration: .oneHour)
         real.clearDelivered()
         // And the production default init path (real NotificationManager) is safe.
@@ -227,8 +264,11 @@ final class CaffeinateManagerStateTests: XCTestCase {
         XCTAssertFalse(m.isActive)
     }
 
-    func testFreshStoreSelectsFourHours() {
-        XCTAssertEqual(makeManager().selectedDuration, .fourHours)
+    func testFreshStoreSelectsFourHoursAndNoAutoActivate() {
+        let m = makeManager()
+        XCTAssertEqual(m.selectedDuration, .fourHours)
+        XCTAssertFalse(m.activateOnLaunch)
+        XCTAssertTrue(store.values.isEmpty, "init must restore, never write; a didSet fired during init")
     }
 
     func testSelectedDurationPersistsAndRestores() {
@@ -236,6 +276,7 @@ final class CaffeinateManagerStateTests: XCTestCase {
         m.selectedDuration = .indefinite
         XCTAssertEqual(store.values[CaffeinateManager.durationKey] as? Int, 0)
         XCTAssertEqual(makeManager().selectedDuration, .indefinite)
+        XCTAssertEqual(store.values.count, 1, "restoring must not rewrite the store")
     }
 
     func testStartLaunchesTimedSessionWithExpectedArguments() {
@@ -243,18 +284,21 @@ final class CaffeinateManagerStateTests: XCTestCase {
         m.selectedDuration = .fifteenMin
         m.start()
         XCTAssertTrue(m.isActive)
+        XCTAssertEqual(m.activeDuration, .fifteenMin)
         XCTAssertEqual(m.remainingSeconds, 900)
         XCTAssertEqual(m.formattedRemaining, "15m 0s")
+        XCTAssertEqual(m.statusText, "Active — 15m 0s left")
         let pid = ProcessInfo.processInfo.processIdentifier
         XCTAssertEqual(launcher.last?.arguments, ["-d", "-i", "-w", "\(pid)", "-t", "900"])
     }
 
-    func testStartIndefiniteShowsInfinity() {
+    func testStartIndefiniteHasNoCountdown() {
         let m = makeManager()
         m.selectedDuration = .indefinite
         m.start()
         XCTAssertTrue(m.isActive)
-        XCTAssertEqual(m.formattedRemaining, "∞")
+        XCTAssertEqual(m.formattedRemaining, "", "indefinite wording lives in statusText only")
+        XCTAssertEqual(m.statusText, "Active — no time limit")
         XCTAssertFalse(launcher.last!.arguments.contains("-t"))
     }
 
@@ -265,13 +309,15 @@ final class CaffeinateManagerStateTests: XCTestCase {
         let clearsBefore = spy.clearCount
         m.stop()
         XCTAssertFalse(m.isActive)
+        XCTAssertNil(m.activeDuration)
         XCTAssertEqual(m.remainingSeconds, 0)
         XCTAssertEqual(m.formattedRemaining, "")
+        XCTAssertEqual(m.statusText, "Inactive")
         XCTAssertEqual(handle.terminateCount, 1)
         XCTAssertEqual(spy.clearCount, clearsBefore + 1)
     }
 
-    func testUserStopDoesNotNotifyWhenChildExits() {
+    func testUserStopDoesNotNotifyOrLeaveATrace() {
         let m = makeManager()
         m.start()
         let launch = launcher.last!
@@ -279,10 +325,11 @@ final class CaffeinateManagerStateTests: XCTestCase {
         // The SIGTERM'd child reports back asynchronously.
         launch.onTermination(false)
         XCTAssertTrue(spy.posted.isEmpty)
+        XCTAssertNil(m.lastEnded)
         XCTAssertFalse(m.isActive)
     }
 
-    func testNaturalExpiryNotifiesWithTheCompletedDuration() {
+    func testNaturalExpiryNotifiesAndLeavesAnInAppTraceUntilNextStart() {
         let m = makeManager()
         m.selectedDuration = .twoHours
         m.start()
@@ -290,6 +337,25 @@ final class CaffeinateManagerStateTests: XCTestCase {
         XCTAssertEqual(spy.posted, [.twoHours])
         XCTAssertFalse(m.isActive)
         XCTAssertEqual(m.remainingSeconds, 0)
+        XCTAssertEqual(m.lastEnded?.duration, .twoHours)
+        XCTAssertTrue(m.statusText.hasPrefix("Kept awake for 2 hours — ended "), m.statusText)
+
+        // The next successful start clears the cue.
+        m.start()
+        XCTAssertNil(m.lastEnded)
+        XCTAssertTrue(m.statusText.hasPrefix("Active — "))
+    }
+
+    func testFailedStartKeepsTheExpiryCue() {
+        let m = makeManager()
+        m.selectedDuration = .twoHours
+        m.start()
+        launcher.last!.onTermination(true)
+        XCTAssertNotNil(m.lastEnded)
+        launcher.failNextLaunch = true
+        m.start()
+        XCTAssertFalse(m.isActive)
+        XCTAssertNotNil(m.lastEnded, "a launch that never happened must not erase what the user has not seen yet")
     }
 
     func testExternalKillDoesNotNotify() {
@@ -298,15 +364,29 @@ final class CaffeinateManagerStateTests: XCTestCase {
         m.start()
         launcher.last!.onTermination(false)   // killall caffeinate
         XCTAssertTrue(spy.posted.isEmpty)
+        XCTAssertNil(m.lastEnded)
         XCTAssertFalse(m.isActive)
     }
 
-    func testIndefiniteExpiryNeverNotifies() {
+    func testIndefiniteExpiryNeverNotifiesOrLeavesATrace() {
         let m = makeManager()
         m.selectedDuration = .indefinite
         m.start()
         launcher.last!.onTermination(true)
         XCTAssertTrue(spy.posted.isEmpty)
+        XCTAssertNil(m.lastEnded)
+        XCTAssertEqual(m.statusText, "Inactive")
+    }
+
+    func testCleanExitArrivingAfterUserStopLeavesNoTrace() {
+        let m = makeManager()
+        m.selectedDuration = .oneHour
+        m.start()
+        let launch = launcher.last!
+        m.stop()
+        launch.onTermination(true)   // caffeinate's own -t fired just as the user hit Stop
+        XCTAssertTrue(spy.posted.isEmpty)
+        XCTAssertNil(m.lastEnded)
     }
 
     func testRestartIgnoresStaleTerminationOfReplacedSession() {
@@ -325,6 +405,7 @@ final class CaffeinateManagerStateTests: XCTestCase {
         first.onTermination(true)
         XCTAssertTrue(m.isActive, "stale termination must not tear down the new session")
         XCTAssertTrue(spy.posted.isEmpty, "stale termination must not notify")
+        XCTAssertNil(m.lastEnded, "stale termination must not record an expiry")
 
         // The new session then expires naturally.
         launcher.last!.onTermination(true)
@@ -338,20 +419,32 @@ final class CaffeinateManagerStateTests: XCTestCase {
         m.start()
         spy.onExtend?()           // user taps an old "Extend 1 hour" banner
         XCTAssertEqual(launcher.launches.count, 1, "must not restart")
-        XCTAssertEqual(m.selectedDuration, .eightHours)
+        XCTAssertEqual(m.activeDuration, .eightHours)
         XCTAssertTrue(m.isActive)
     }
 
-    func testExtendAfterExpiryStartsAFreshHour() {
+    func testExtendAfterExpiryRunsAnHourWithoutChangingThePreference() {
         let m = makeManager()
         m.selectedDuration = .fifteenMin
         m.start()
         launcher.last!.onTermination(true)
         XCTAssertFalse(m.isActive)
+        XCTAssertEqual(m.displayedDuration, .fifteenMin, "inactive: the menu checks the saved preference")
         spy.onExtend?()
         XCTAssertTrue(m.isActive)
-        XCTAssertEqual(m.selectedDuration, .oneHour)
+        XCTAssertEqual(m.activeDuration, .oneHour)
+        XCTAssertEqual(m.displayedDuration, .oneHour, "active: the menu checks the running session")
+        XCTAssertNil(m.lastEnded, "a successful Extend clears the expiry cue")
+        XCTAssertEqual(m.statusText, "Active — 1h 0m left")
         XCTAssertEqual(launcher.last?.arguments.suffix(2), ["-t", "3600"])
+        XCTAssertEqual(m.selectedDuration, .fifteenMin, "Extend must not overwrite the saved preference")
+        XCTAssertEqual(store.values[CaffeinateManager.durationKey] as? Int, 900)
+
+        // The extension itself expires: recorded as a 1-hour session, menu back to the preference.
+        launcher.last!.onTermination(true)
+        XCTAssertEqual(spy.posted, [.fifteenMin, .oneHour])
+        XCTAssertEqual(m.lastEnded?.duration, .oneHour)
+        XCTAssertEqual(m.displayedDuration, .fifteenMin)
     }
 
     func testFailedLaunchLeavesNoPartialState() {
@@ -360,6 +453,7 @@ final class CaffeinateManagerStateTests: XCTestCase {
         launcher.failNextLaunch = true
         m.start()
         XCTAssertFalse(m.isActive)
+        XCTAssertNil(m.activeDuration)
         XCTAssertEqual(m.remainingSeconds, 0)
         XCTAssertEqual(m.formattedRemaining, "")
         XCTAssertTrue(launcher.launches.isEmpty)
@@ -375,6 +469,134 @@ final class CaffeinateManagerStateTests: XCTestCase {
         m.toggle()
         XCTAssertFalse(m.isActive)
     }
+
+    // Activate on Launch
+
+    func testActivateOnLaunchPersists() {
+        let m = makeManager()
+        m.activateOnLaunch = true
+        XCTAssertEqual(store.values[CaffeinateManager.activateOnLaunchKey] as? Bool, true)
+        XCTAssertTrue(makeManager().activateOnLaunch)
+        XCTAssertEqual(store.values.count, 1, "restoring must not rewrite the store")
+    }
+
+    func testLaunchHookStartsOnceOnlyWhenOptedIn() {
+        store.values[CaffeinateManager.activateOnLaunchKey] = true
+        let m = makeManager()
+        m.startOnLaunchIfNeeded()
+        XCTAssertTrue(m.isActive)
+        XCTAssertEqual(launcher.launches.count, 1)
+        m.startOnLaunchIfNeeded()   // re-appearance of the status item
+        XCTAssertEqual(launcher.launches.count, 1, "hook must be one-shot")
+    }
+
+    func testLaunchHookIsInertByDefault() {
+        let m = makeManager()
+        m.startOnLaunchIfNeeded()
+        XCTAssertFalse(m.isActive)
+        XCTAssertTrue(launcher.launches.isEmpty)
+    }
+
+    func testLaunchHookUsesTheSavedDuration() {
+        store.values[CaffeinateManager.activateOnLaunchKey] = true
+        store.values[CaffeinateManager.durationKey] = SleepDuration.thirtyMin.rawValue
+        let m = makeManager()
+        m.startOnLaunchIfNeeded()
+        XCTAssertEqual(m.activeDuration, .thirtyMin)
+        XCTAssertEqual(launcher.last?.arguments.suffix(2), ["-t", "1800"])
+    }
+
+    /// The flag must be set on the first appearance regardless of the opt-in,
+    /// otherwise turning the toggle on mid-run would let a later re-appearance
+    /// of the status item start a session with no click.
+    func testLaunchHookIsOneShotEvenWhenNotOptedInAtFirstAppearance() {
+        let m = makeManager()
+        m.startOnLaunchIfNeeded()          // launched with the toggle off
+        m.activateOnLaunch = true          // user opts in during this run
+        m.startOnLaunchIfNeeded()          // status item re-appears
+        XCTAssertFalse(m.isActive, "opting in must not start a session until the next launch")
+        XCTAssertTrue(launcher.launches.isEmpty)
+    }
+
+    /// A stale "Extend 1 hour" banner can launch the app and start a session
+    /// before the status item appears; the hook must not restart it.
+    func testLaunchHookDoesNotRestartARunningSession() {
+        store.values[CaffeinateManager.activateOnLaunchKey] = true
+        let m = makeManager()
+        m.start(duration: .oneHour)
+        let running = launcher.last!.handle
+        m.startOnLaunchIfNeeded()
+        XCTAssertEqual(launcher.launches.count, 1, "must not stop and relaunch")
+        XCTAssertEqual(running.terminateCount, 0)
+        XCTAssertEqual(m.activeDuration, .oneHour)
+    }
+
+    // Menu-open permission refresh
+
+    /// AppKit posts this with the tracked menu as the object. The manager never
+    /// sees the MenuBarExtra's NSMenu, so it must listen with `object: nil`.
+    /// `queue: nil` makes delivery synchronous, so no expectation is needed.
+    func testEveryMenuOpenRefreshesNotificationAuthorization() {
+        let m = makeManager()
+        withExtendedLifetime(m) {
+            XCTAssertEqual(spy.refreshCount, 0)
+            NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
+            XCTAssertEqual(spy.refreshCount, 1)
+            NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
+            XCTAssertEqual(spy.refreshCount, 2, "permission must be re-read on every open, not only the first")
+        }
+    }
+
+    /// The observer block must capture the manager weakly, so a manager is
+    /// deallocatable and a dead one refreshes nothing. Whether deinit also
+    /// unregisters the block is not observable here: a dead weak capture is a
+    /// no-op whether or not it is still registered.
+    func testManagerIsDeallocatableAndDeadManagerDoesNotRefresh() {
+        weak var weakManager: CaffeinateManager?
+        do {
+            let m = CaffeinateManager(launcher: launcher, notifications: spy, defaults: store)
+            weakManager = m
+        }
+        XCTAssertNil(weakManager, "observer block must capture the manager weakly")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
+        XCTAssertEqual(spy.refreshCount, 0)
+    }
+
+    /// The `.menu`-style MenuBarExtra rebuilds its items only when an observed
+    /// value changes, never merely because the menu opened. The ended cue's
+    /// today/older wording depends on the clock, so every open must invalidate
+    /// whatever observed `statusText`, or a cue from last night keeps reading
+    /// as today's.
+    func testMenuOpenInvalidatesObservedStatusTextWhileShowingAnEndedCue() {
+        let m = makeManager()
+        m.start(duration: .twoHours)
+        launcher.last!.onTermination(true)
+        XCTAssertNotNil(m.lastEnded)
+        let before = m.menuOpenedAt
+        let invalidated = expectation(description: "statusText observation invalidated by the menu open")
+        withObservationTracking {
+            _ = m.statusText
+        } onChange: {
+            invalidated.fulfill()
+        }
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
+        wait(for: [invalidated], timeout: 1)
+        XCTAssertGreaterThanOrEqual(m.menuOpenedAt, before)
+        XCTAssertTrue(m.statusText.hasPrefix("Kept awake for 2 hours — ended "), m.statusText)
+    }
+
+    // Notification permission surfacing
+
+    func testDeniedNotificationPermissionIsSurfaced() {
+        let m = makeManager()
+        XCTAssertFalse(m.notificationsDenied)
+        spy.onAuthorizationDenied?(true)
+        XCTAssertTrue(m.notificationsDenied)
+        spy.onAuthorizationDenied?(false)
+        XCTAssertFalse(m.notificationsDenied)
+    }
+
+    // Countdown
 
     /// The countdown is derived from a deadline, not decremented per fire, so
     /// coalesced or missed timer fires (menu open, main-thread stall, system

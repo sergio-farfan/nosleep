@@ -47,6 +47,26 @@ enum SleepDuration: Int, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// A timed session that expired on its own (not stopped by the user). Kept
+/// as an in-app record of the expiry so the menu can show it even when the
+/// completion notification was suppressed (Focus, display mirroring, denied
+/// permission) or simply not noticed.
+struct EndedSession: Equatable, Sendable {
+    let duration: SleepDuration
+    let endedAt: Date
+
+    /// e.g. "Kept awake for 2 hours — ended 14:32", or, once the day has
+    /// passed, "… — ended Sep 10, 2026 at 14:32" so an old cue cannot read as
+    /// today's. `now` decides what "today" is: callers pass the moment the text
+    /// is looked at (the manager uses the last menu open), not the expiry time.
+    func summary(now: Date) -> String {
+        let when = Calendar.current.isDate(endedAt, inSameDayAs: now)
+            ? endedAt.formatted(date: .omitted, time: .shortened)
+            : endedAt.formatted(date: .abbreviated, time: .shortened)
+        return "Kept awake for \(duration.label) — ended \(when)"
+    }
+}
+
 // MARK: - Process seam
 
 /// A running `caffeinate` child. Abstracted so the start/stop/restart/termination
@@ -92,7 +112,7 @@ struct ProcessCaffeinateLauncher: CaffeinateLaunching {
 
 // MARK: - Persistence seam
 
-/// The one key/value pair the manager persists. Abstracted so tests can inject
+/// The key/value pairs the manager persists. Abstracted so tests can inject
 /// an in-memory store: every `UserDefaults` suite, even a throwaway one, is
 /// materialised by cfprefsd as ~/Library/Preferences/<suite>.plist, and
 /// `removePersistentDomain(forName:)` does not unlink the file.
@@ -111,17 +131,44 @@ extension UserDefaults: DurationStore {}
 final class CaffeinateManager {
     nonisolated private static let log = Logger(subsystem: "com.nosleep.app", category: "session")
 
-    // `nonisolated` so the pure helpers and XCTest can reference it.
+    // `nonisolated` so the pure helpers and XCTest can reference them.
     nonisolated static let durationKey = "selectedDuration"
+    nonisolated static let activateOnLaunchKey = "activateOnLaunch"
 
     var isActive = false
     /// Whole seconds left in a timed session; recomputed from `deadlineUptime`
     /// on every tick so missed timer fires (menu open, main-thread stall,
     /// system sleep) resynchronise instead of accumulating drift.
     private(set) var remainingSeconds: Int = 0
+    /// The duration of the session that is currently running (nil when inactive).
+    /// Distinct from `selectedDuration`: "Extend 1 hour" runs a 1-hour session
+    /// without touching the user's saved preference.
+    private(set) var activeDuration: SleepDuration?
+    /// Set when a timed session expires naturally; cleared by the next
+    /// *successful* start(), so a failed launch does not erase an unseen cue.
+    private(set) var lastEnded: EndedSession?
+    /// True when the user has denied notification permission, so the menu can
+    /// say why no session-ended alert will appear.
+    private(set) var notificationsDenied = false
+    /// When the menu was last opened. The `.menu`-style MenuBarExtra rebuilds
+    /// its items only when an observed value changes, never merely because it
+    /// opened, so anything the status line derives from the clock (the ended
+    /// cue's today/older wording) must read this to be re-evaluated per open.
+    private(set) var menuOpenedAt = Date.now
+
+    /// The user's saved preferred duration — what Start and Activate on Launch
+    /// use. Persisted on every change; only `changeDuration(_:)` assigns it.
     var selectedDuration: SleepDuration {
         didSet {
             defaults.set(selectedDuration.rawValue, forKey: Self.durationKey)
+        }
+    }
+
+    /// Opt-in: start a session with the saved duration as soon as the app
+    /// launches (covers login-item launches, where nobody clicks anything).
+    var activateOnLaunch: Bool {
+        didSet {
+            defaults.set(activateOnLaunch, forKey: Self.activateOnLaunchKey)
         }
     }
 
@@ -201,7 +248,9 @@ final class CaffeinateManager {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var stoppedByUser = false
     @ObservationIgnored private var runToken = 0
-    @ObservationIgnored private var activeDuration: SleepDuration?
+    @ObservationIgnored private var didRunLaunchHook = false
+    // nonisolated(unsafe) so deinit (nonisolated) may read it to remove the observer.
+    @ObservationIgnored nonisolated(unsafe) private var menuObserver: NSObjectProtocol?
     /// Uptime-clock deadline of the current timed session. Same clock family as
     /// caffeinate's dispatch-time-based `-t`, so both pause during system sleep.
     @ObservationIgnored private var deadlineUptime: TimeInterval = 0
@@ -216,29 +265,71 @@ final class CaffeinateManager {
         self.defaults = defaults
         self.selectedDuration = Self.restoredDuration(
             from: defaults.object(forKey: Self.durationKey) as? Int)
+        self.activateOnLaunch = defaults.object(forKey: Self.activateOnLaunchKey) as? Bool ?? false
         self.notifications.onExtend = { [weak self] in self?.extendOneHour() }
+        self.notifications.onAuthorizationDenied = { [weak self] denied in self?.notificationsDenied = denied }
         self.notifications.requestAuthorization()
+        // Each time the menu opens: stamp the open (so clock-derived text is
+        // re-evaluated) and re-check notification permission, so a change made
+        // in System Settings is reflected without relaunching.
+        menuObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.menuOpenedAt = .now
+                self.notifications.refreshAuthorizationStatus()
+            }
+        }
     }
 
+    deinit {
+        if let menuObserver { NotificationCenter.default.removeObserver(menuObserver) }
+    }
+
+    // MARK: Presentation
+
+    /// Countdown text for a timed session; empty when inactive or indefinite
+    /// (the indefinite wording lives in `statusText`).
     var formattedRemaining: String {
-        guard isActive else { return "" }
-        if activeDuration == .indefinite { return "∞" }
+        guard isActive, activeDuration != .indefinite else { return "" }
         return Self.format(seconds: remainingSeconds)
+    }
+
+    /// What the Duration menu checks: the running session while one is active
+    /// (so an "Extend 1 hour" session shows "1 hour"), otherwise the saved
+    /// preference it will start with next.
+    var displayedDuration: SleepDuration { activeDuration ?? selectedDuration }
+
+    /// The status line shown at the top of the menu.
+    var statusText: String {
+        if isActive {
+            return activeDuration == .indefinite
+                ? "Active — no time limit"
+                : "Active — \(formattedRemaining) left"
+        }
+        if let lastEnded { return lastEnded.summary(now: menuOpenedAt) }
+        return "Inactive"
     }
 
     // MARK: Session control
 
+    /// Start a session with the user's preferred duration.
     func start() {
+        start(duration: selectedDuration)
+    }
+
+    /// Start (or restart) a session with an explicit duration, leaving the
+    /// saved preference alone.
+    func start(duration: SleepDuration) {
         stop()
 
         runToken += 1
         let token = runToken
         stoppedByUser = false
 
-        let duration = selectedDuration
         let args = Self.caffeinateArguments(for: duration,
                                             ownPID: ProcessInfo.processInfo.processIdentifier)
-        activeDuration = duration
 
         let handle: any CaffeinateHandle
         do {
@@ -249,12 +340,13 @@ final class CaffeinateManager {
             // stop() above already reset isActive/remainingSeconds, so no partial
             // state survives a failed launch; just leave a trace for diagnosis.
             Self.log.error("failed to launch caffeinate: \(error.localizedDescription, privacy: .public)")
-            activeDuration = nil
             return
         }
 
         process = handle
+        activeDuration = duration
         isActive = true
+        lastEnded = nil   // after a successful launch, so a failed one keeps the cue
 
         if duration != .indefinite {
             remainingSeconds = duration.rawValue
@@ -286,6 +378,7 @@ final class CaffeinateManager {
         }
         process = nil
         isActive = false
+        activeDuration = nil
         remainingSeconds = 0
     }
 
@@ -298,11 +391,21 @@ final class CaffeinateManager {
         start()
     }
 
+    /// The notification's "Extend 1 hour" action: a fresh one-hour session that
+    /// does not overwrite the user's preferred duration.
     func extendOneHour() {
         // Honour the action only for the session it announced: if a newer
         // session is already running, a stale notification must not replace it.
         guard !isActive else { return }
-        selectedDuration = .oneHour
+        start(duration: .oneHour)
+    }
+
+    /// One-shot launch hook, invoked when the menu-bar item first appears.
+    /// Honours the opt-in "Activate on Launch" preference.
+    func startOnLaunchIfNeeded() {
+        guard !didRunLaunchHook else { return }
+        didRunLaunchHook = true
+        guard activateOnLaunch, !isActive else { return }
         start()
     }
 
@@ -339,11 +442,12 @@ final class CaffeinateManager {
         deadlineUptime = 0
         process = nil
         isActive = false
+        activeDuration = nil
         remainingSeconds = 0
         stoppedByUser = false
-        activeDuration = nil
 
         if notifiable, let completed {
+            lastEnded = EndedSession(duration: completed, endedAt: .now)
             notifications.postCompletion(duration: completed)
         }
     }
