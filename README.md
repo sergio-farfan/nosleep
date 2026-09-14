@@ -18,13 +18,13 @@ brew install --cask sergio-farfan/tap/nosleep
 
 Homebrew ≥ 6 asks you to trust the tap the first time (`brew trust sergio-farfan/tap`).
 NoSleep is ad-hoc signed (not notarized), so macOS blocks the first launch: allow it once under
-**System Settings → Privacy & Security → Open Anyway**, or install without the quarantine flag:
+**System Settings → Privacy & Security → Open Anyway**, or clear the quarantine flag:
 
 ```bash
-brew install --cask --no-quarantine sergio-farfan/tap/nosleep
+xattr -dr com.apple.quarantine /Applications/NoSleep.app
 ```
 
-Update with `brew upgrade --cask nosleep`; remove with `brew uninstall --cask --zap nosleep`
+Homebrew carries that one-time approval forward on later upgrades. Update with `brew upgrade --cask nosleep`; remove with `brew uninstall --cask --zap nosleep`
 (`--zap` also deletes the saved preferences).
 
 ### Option 2 — Download the DMG
