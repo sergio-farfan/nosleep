@@ -10,7 +10,24 @@ No Dock icon. No main window. Just a cup icon in your menu bar.
 
 ## Installation
 
-### Option 1 — Download the DMG (recommended)
+### Option 1 — Homebrew (recommended)
+
+```bash
+brew install --cask sergio-farfan/tap/nosleep
+```
+
+Homebrew ≥ 6 asks you to trust the tap the first time (`brew trust sergio-farfan/tap`).
+NoSleep is ad-hoc signed (not notarized), so macOS blocks the first launch: allow it once under
+**System Settings → Privacy & Security → Open Anyway**, or install without the quarantine flag:
+
+```bash
+brew install --cask --no-quarantine sergio-farfan/tap/nosleep
+```
+
+Update with `brew upgrade --cask nosleep`; remove with `brew uninstall --cask --zap nosleep`
+(`--zap` also deletes the saved preferences).
+
+### Option 2 — Download the DMG
 
 1. Download `NoSleep-<version>.dmg` from the [Releases](../../releases) page.
 2. Open the DMG and drag **NoSleep** onto the **Applications** folder.
@@ -25,7 +42,7 @@ No Dock icon. No main window. Just a cup icon in your menu bar.
 
 Launch NoSleep from Applications — a cup icon (☕) appears in your menu bar.
 
-### Option 2 — Build from source
+### Option 3 — Build from source
 
 Requires macOS 14+, Xcode Command Line Tools (`xcode-select --install`), and Swift 6+. Running `swift test` needs full Xcode: the Command Line Tools alone ship no XCTest.
 
@@ -35,7 +52,7 @@ open NoSleep.app        # run it — cup icon appears in the menu bar
 ./install.sh            # optional: copy to ~/Applications
 ```
 
-See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-applications-optional) below for details.
+See [Build](#build), [Run](#run), and [Install to ~/Applications](#install-to-applications-optional) below for details. A source build installed with `install.sh` and a Homebrew install are the same app at two paths; keep one — the single-instance lock quits whichever launches second.
 
 ## Features
 
@@ -102,7 +119,7 @@ Quits any running copy, installs `NoSleep.app` into `~/Applications/`, and relau
 ```bash
 ./make-icons.sh      # only when the icon/background art changes — generates assets/AppIcon.icns
 ./build.sh           # builds the universal (Apple Silicon + Intel) NoSleep.app
-./package-dmg.sh     # produces NoSleep-<version>.dmg
+./package-dmg.sh     # produces NoSleep-<version>.dmg and NoSleep-<version>.dmg.sha256
 ```
 
 `package-dmg.sh` builds a styled disk image (app on the left, an arrow to the
@@ -110,7 +127,35 @@ Quits any running copy, installs `NoSleep.app` into `~/Applications/`, and relau
 name is read from the app's `Info.plist`. macOS may prompt to let your terminal control
 Finder the first time — this is required for the DMG window layout.
 
+## Releasing
+
+1. Set `VERSION` in `build.sh` and commit.
+2. Tag and push: `git tag -a vX.Y.Z -m "NoSleep X.Y.Z" && git push origin vX.Y.Z`.
+3. The [Release workflow](.github/workflows/release.yml) tests, builds, packages, verifies, and
+   publishes the GitHub Release with `NoSleep-X.Y.Z.dmg` and its `.sha256`. Edit the generated
+   notes afterwards if you want more than the commit list.
+4. Homebrew cask. With the `TAP_DISPATCH_TOKEN` secret configured in this repository (a
+   fine-grained PAT for `sergio-farfan/homebrew-tap` with *Contents: Read and write*), the
+   workflow dispatches a bump to the tap automatically. Otherwise bump by hand:
+
+   ```bash
+   cd ~/projects/git/homebrew-tap
+   NEW=X.Y.Z
+   SHA=$(curl -sL "https://github.com/sergio-farfan/nosleep/releases/download/v${NEW}/NoSleep-${NEW}.dmg.sha256" | cut -d' ' -f1)
+   sed -i '' -e "s/^  version \".*\"/  version \"${NEW}\"/" -e "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/" Casks/nosleep.rb
+   git commit -am "nosleep ${NEW}" && git push
+   brew update && brew fetch --cask sergio-farfan/tap/nosleep   # confirm URL + hash resolve
+   ```
+
+   Users then get the new version with `brew update && brew upgrade --cask nosleep`.
+   `brew livecheck --cask sergio-farfan/tap/nosleep` shows whether the cask lags the latest release.
+
 ## Uninstall
+
+**Homebrew install:** `brew uninstall --cask nosleep` quits the app and removes it and its Start at
+Login item; add `--zap` to also delete the preferences and the single-instance lock.
+
+**DMG or source install:**
 
 1. Turn off **Start at Login** first — in the NoSleep menu, or under
    **System Settings › General › Login Items**. The login item is tied to the app
@@ -155,7 +200,9 @@ nosleep/
 ├── docs/
 │   ├── reviews/                   # Code review reports
 │   └── superpowers/               # Design spec + implementation plan (v1.1.0)
-├── .github/workflows/ci.yml       # Build, test, bundle, package and lint on pushes to main and PRs
+├── .github/workflows/
+│   ├── ci.yml                     # Build, test, bundle, package and lint on pushes to main and PRs
+│   └── release.yml                # Tag push → GitHub Release (DMG + .sha256) → Homebrew tap bump
 ├── build.sh                       # Build universal binary + bundle + code sign
 ├── make-icons.sh                  # Regenerate icon/background art
 ├── package-dmg.sh                 # Build styled NoSleep-<version>.dmg

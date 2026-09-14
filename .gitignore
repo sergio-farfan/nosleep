@@ -4,6 +4,7 @@
 
 # Distribution
 *.dmg
+*.dmg.sha256
 assets/AppIcon.iconset/
 
 # macOS

@@ -53,6 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           dmg=$(ls NoSleep-*.dmg)
+          shasum -a 256 -c "$dmg.sha256"
           hdiutil verify "$dmg"
           mount=$(hdiutil attach -readonly -nobrowse -noautoopen "$dmg" | grep -o '/Volumes/.*' | head -n1)
           ls -la "$mount"
@@ -66,7 +67,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: NoSleep-dmg
-          path: NoSleep-*.dmg
+          path: |
+            NoSleep-*.dmg
+            NoSleep-*.dmg.sha256
           if-no-files-found: error
 
   shellcheck:

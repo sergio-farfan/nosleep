@@ -111,7 +111,7 @@ fi
 mkdir -p "$STAGING/.fseventsd" && touch "$STAGING/.fseventsd/no_log"
 
 echo "==> Creating writable image…"
-rm -f "$DMG_TMP" "$DMG_FINAL"
+rm -f "$DMG_TMP" "$DMG_FINAL" "${DMG_FINAL}.sha256"
 SIZE_MB=$(( $(du -sm "$STAGING" | awk '{print $1}') + 20 )) # content + slack for .DS_Store/background
 hdiutil create -srcfolder "$STAGING" -volname "$VOL_NAME" \
     -fs HFS+ -format UDRW -size "${SIZE_MB}m" -ov "$DMG_TMP" >/dev/null
@@ -200,4 +200,9 @@ echo "==> Converting to compressed image ${DMG_FINAL}…"
 hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG_FINAL" >/dev/null
 rm -f "$DMG_TMP"
 
-echo "==> Done! Created ${DMG_FINAL}"
+# Checksum sidecar: lets the Homebrew cask bump (and anyone else) verify the
+# asset without downloading it twice. Bare filename, so `shasum -c` works from
+# the directory that holds both files.
+shasum -a 256 "$DMG_FINAL" > "${DMG_FINAL}.sha256"
+
+echo "==> Done! Created ${DMG_FINAL} and ${DMG_FINAL}.sha256"

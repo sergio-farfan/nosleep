@@ -1,0 +1,144 @@
+name: Release
+
+# Pushing a tag `vX.Y.Z` builds the universal bundle, packages the DMG and its
+# .sha256 sidecar, publishes (or refreshes) the GitHub Release, and asks the
+# Homebrew tap to bump the `nosleep` cask. A workflow_dispatch run is a dry run:
+# same build, artifacts uploaded to the run, nothing published.
+#
+# The tap bump is DORMANT until this repository secret exists:
+#   TAP_DISPATCH_TOKEN  fine-grained PAT scoped to sergio-farfan/homebrew-tap with
+#                       "Contents: Read and write" (needed for repository_dispatch).
+# Without it the Release is still published; bump the tap by hand (README →
+# Releasing).
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build for a dry run, e.g. 1.2.1 (must match VERSION in build.sh; no Release is published)'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version and publish flag
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"; PUBLISH=true
+          else
+            VERSION="$INPUT_VERSION"; PUBLISH=false
+          fi
+          # digits.dots with an optional pre-release suffix; rejects shell metacharacters.
+          printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$' \
+            || { echo "Invalid version: '$VERSION'"; exit 1; }
+          # build.sh is the single source of truth for the bundle version. A tag
+          # that disagrees with it would publish a mislabeled asset, so refuse.
+          BUILT="$(sed -nE 's/^VERSION="([^"]+)".*/\1/p' build.sh)"
+          if [ "$BUILT" != "$VERSION" ]; then
+            echo "Version $VERSION does not match VERSION=\"$BUILT\" in build.sh — bump build.sh and re-tag."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$VERSION publish=$PUBLISH"
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: swift test
+
+      # A headless runner has no Finder session, so package-dmg.sh's window
+      # layout step times out and is skipped by design; the image itself, its
+      # volume icon and the .sha256 sidecar are produced normally.
+      - name: Bundle and package
+        run: |
+          ./build.sh
+          ./package-dmg.sh
+
+      - name: Verify artifacts
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          dmg="NoSleep-$VERSION.dmg"
+          test -f "$dmg"
+          test -f "$dmg.sha256"
+          shasum -a 256 -c "$dmg.sha256"
+          hdiutil verify "$dmg"
+          codesign --verify --strict NoSleep.app
+          lipo -archs NoSleep.app/Contents/MacOS/NoSleep | grep -q 'x86_64 arm64\|arm64 x86_64'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' NoSleep.app/Contents/Info.plist)" = "$VERSION"
+
+      - name: Publish GitHub Release
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Notes were written by hand (or by an earlier run); refresh only the assets.
+            gh release upload "$TAG" "NoSleep-$VERSION.dmg" "NoSleep-$VERSION.dmg.sha256" --clobber
+          else
+            {
+              echo "## Install"
+              echo "Homebrew: \`brew install --cask sergio-farfan/tap/nosleep\` — or download **NoSleep-$VERSION.dmg** below, open it, and drag **NoSleep** onto **Applications**. Universal binary (Apple Silicon + Intel), macOS 14+."
+              echo
+              echo "NoSleep is ad-hoc signed (not notarized): allow the first launch once in **System Settings → Privacy & Security → Open Anyway**, or clear the quarantine flag with \`xattr -dr com.apple.quarantine /Applications/NoSleep.app\`."
+              echo
+              echo "## Changes"
+              gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" -q .body
+            } > notes.md
+            gh release create "$TAG" "NoSleep-$VERSION.dmg" "NoSleep-$VERSION.dmg.sha256" \
+              --title "NoSleep $VERSION" --notes-file notes.md
+          fi
+
+      - name: Notify Homebrew tap
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TAP_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "TAP_DISPATCH_TOKEN not set -> skipping the Homebrew tap bump; bump sergio-farfan/homebrew-tap by hand (README → Releasing)."
+            exit 0
+          fi
+          SHA="$(cut -d' ' -f1 "NoSleep-$VERSION.dmg.sha256")"
+          jq -n --arg v "$VERSION" --arg s "$SHA" \
+            '{event_type: "nosleep-release", client_payload: {cask: "nosleep", version: $v, sha256: $s}}' \
+            | gh api "repos/sergio-farfan/homebrew-tap/dispatches" --input -
+          echo "Dispatched nosleep-release $VERSION to sergio-farfan/homebrew-tap"
+
+      - name: Upload dry-run artifact
+        if: steps.meta.outputs.publish != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: NoSleep-${{ steps.meta.outputs.version }}-dmg
+          path: |
+            NoSleep-*.dmg
+            NoSleep-*.dmg.sha256
+          if-no-files-found: error
