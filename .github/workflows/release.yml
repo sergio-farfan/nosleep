@@ -19,6 +19,10 @@ on:
       version:
         description: 'Version to build for a dry run, e.g. 1.2.1 (must match VERSION in build.sh; no Release is published)'
         required: true
+      notify_tap:
+        description: 'Also send the Homebrew tap bump dispatch. Safe at the released version (the tap no-ops when already there); use it to verify TAP_DISPATCH_TOKEN.'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -117,7 +121,7 @@ jobs:
           fi
 
       - name: Notify Homebrew tap
-        if: steps.meta.outputs.publish == 'true'
+        if: steps.meta.outputs.publish == 'true' || github.event.inputs.notify_tap == 'true'
         env:
           GH_TOKEN: ${{ secrets.TAP_DISPATCH_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
