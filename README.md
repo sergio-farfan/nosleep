@@ -24,8 +24,10 @@ NoSleep is ad-hoc signed (not notarized), so macOS blocks the first launch: allo
 xattr -dr com.apple.quarantine /Applications/NoSleep.app
 ```
 
-Homebrew carries that one-time approval forward on later upgrades. Update with `brew upgrade --cask nosleep`; remove with `brew uninstall --cask --zap nosleep`
-(`--zap` also deletes the saved preferences).
+Expect that prompt again after every `brew upgrade`: ad-hoc builds get a new code identity each
+release, so macOS cannot carry the approval over until releases are notarized. Update with
+`brew upgrade --cask nosleep`; remove with `brew uninstall --cask --zap nosleep` (`--zap` also
+deletes the saved preferences).
 
 ### Option 2 — Download the DMG
 
