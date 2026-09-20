@@ -4,6 +4,10 @@ A lightweight macOS menu bar utility that keeps your Mac from going to sleep due
 
 No Dock icon. No main window. Just a cup icon in your menu bar.
 
+```bash
+brew install --cask sergio-farfan/tap/nosleep
+```
+
 <p align="center">
   <img src="assets/screenshot1.png" alt="NoSleep menu bar dropdown" width="300">
 </p>

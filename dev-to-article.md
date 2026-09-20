@@ -4,7 +4,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 
 ![NoSleep menu bar dropdown](https://raw.githubusercontent.com/sergio-farfan/nosleep/61b7b5a3e0c6d021656bc61f7ecd30a5a904690b/assets/screenshot1.png)
 
-> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, the menu got native checkmarks, an in-menu record of the last session, **Activate on Launch** and **About**, and the test suite went from 5 to 87. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-87-tests) below. Download: [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) (universal, macOS 14+). The 1.2.0 DMG was rebuilt on 2026-09-12 to include the menu additions; both builds report 1.2.0, so if your menu has no **About NoSleep** item, download it again.
+> **Update — v1.2.0:** a full code review of the whole repository (about 500 lines of app Swift plus the build and packaging scripts) turned up far more than I expected — a dozen confirmed bugs in the app alone, among them a first-launch default that silently meant *Indefinite*, a countdown that froze while you were looking at it, and a `caffeinate` child that outlived the app after a crash. The eight headline bugs are fixed below, Start at Login is rebuilt on `SMAppService`, the packaging scripts are fixed too, the menu got native checkmarks, an in-menu record of the last session, **Activate on Launch** and **About**, and the test suite went from 5 to 87. Details in the [v1.2.0 section](#v120-eight-bugs-a-login-item-rewrite-and-87-tests) below. Install with Homebrew — `brew install --cask sergio-farfan/tap/nosleep` — or download [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) (universal, macOS 14+). The 1.2.0 DMG was rebuilt on 2026-09-12 to include the menu additions; both builds report 1.2.0, so if your menu has no **About NoSleep** item, download it again (or `brew upgrade --cask nosleep`).
 >
 > **Update — v1.1.0:** NoSleep now ships as a downloadable, drag-to-install `.dmg` (universal), activates the moment you pick a duration, shows a green active indicator with a readable countdown, and pops a notification with an **Extend 1 hour** action when a timed session ends (hover the notification to reveal the button; the *Alerts* style keeps it on screen until you do). The new bits — and the async race the notification introduced — are covered in the [v1.1.0 section](#v110-autoactivate-completion-alerts-and-a-real-download) below.
 
@@ -12,7 +12,7 @@ So I built **NoSleep** — a tiny macOS menu bar utility that wraps `caffeinate`
 
 ## Features
 
-- **Download & run** — grab the `.dmg` from Releases and drag NoSleep to Applications (universal: Apple Silicon + Intel)
+- **Homebrew or DMG** — `brew install --cask sergio-farfan/tap/nosleep`, or grab the `.dmg` from Releases and drag NoSleep to Applications (universal: Apple Silicon + Intel)
 - **One-click toggle** — start/stop caffeinate from the menu bar
 - **Auto-activate** — pick a duration and it starts immediately, no extra click
 - **Duration presets** — 15 min, 30 min, 1 hr, 2 hr, 4 hr, 8 hr, 10 hr, or Indefinite
@@ -354,13 +354,32 @@ Every Swift fix above except the Observation migration has a test that fails if 
 
 The lesson I am taking from this release: the bugs were not in the clever part (the run-token race from 1.1.0 held up fine). They were in the boring parts — a default value, a run-loop mode, a child process nobody waits for — and none of them were reachable by tests until the class could be constructed outside an `.app`.
 
-**Download:** [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) — universal (Apple Silicon + Intel), macOS 14+. Open it, drag **NoSleep** onto Applications, and do the one-time Gatekeeper step in [Build & Install](#build-install) below. Upgrading from 1.1.0 or from the earlier 1.2.0 build just means replacing the app; your Start at Login setting is carried over, and the new copy quits the old one for you.
+**Install:** the quickest way is now Homebrew, from my personal tap:
+
+```bash
+brew install --cask sergio-farfan/tap/nosleep   # first time: accept the prompt to trust the tap
+brew upgrade --cask nosleep                      # later updates
+```
+
+Or download [NoSleep-1.2.0.dmg](https://github.com/sergio-farfan/nosleep/releases/download/v1.2.0/NoSleep-1.2.0.dmg) — universal (Apple Silicon + Intel), macOS 14+ — open it and drag **NoSleep** onto Applications. Either way, do the one-time Gatekeeper step in [Build & Install](#build-install) below; because releases are ad-hoc signed, macOS asks again after each upgrade. Upgrading from 1.1.0 or from the earlier 1.2.0 build just means replacing the app (Homebrew does it for you); your Start at Login setting is carried over, and the new copy quits the old one.
+
+The tap side is automated too: pushing a version tag builds the DMG, publishes the GitHub Release with a `.sha256` sidecar, and fires a `repository_dispatch` at the tap repository, whose workflow rewrites the cask's `version` and `sha256`, re-validates it on a clean runner, and pushes — so `brew upgrade` sees a new NoSleep within minutes of a release, with no hand-edited formula.
 
 ---
 
 ## Build & Install
 
-**Easiest:** download `NoSleep-<version>.dmg` from the [latest release](https://github.com/sergio-farfan/nosleep/releases), open it, and drag **NoSleep** onto Applications. On first launch, run the `xattr` command above once (or open it, then **System Settings → Privacy & Security → Open Anyway**).
+**Easiest:** Homebrew, from my tap:
+
+```bash
+brew install --cask sergio-farfan/tap/nosleep
+```
+
+Homebrew 6 and later ask you to trust a third-party tap the first time (`brew trust sergio-farfan/tap`). Update with `brew upgrade --cask nosleep`; remove with `brew uninstall --cask --zap nosleep`.
+
+**Or the DMG:** download `NoSleep-<version>.dmg` from the [latest release](https://github.com/sergio-farfan/nosleep/releases), open it, and drag **NoSleep** onto Applications.
+
+Either way, on first launch run the `xattr` command above once (or open it, then **System Settings → Privacy & Security → Open Anyway**); ad-hoc signed builds get a new code identity per release, so expect that step again after each upgrade until I notarize.
 
 **From source** — the project uses Swift Package Manager, no `.xcodeproj` needed:
 
