@@ -182,13 +182,41 @@ hot, repeat the `top -o cpu` check there before attributing anything to NoSleep.
 38–55 % to 73 % within ten seconds; the 1/5/15-minute load averages trail and need several minutes
 to fall.
 
+### Temperatures after the kill (10:44, 25 minutes later)
+
+The sensor app behind the readout above (MenuBar Stats) has no command-line interface, and
+`powermetrics` on Apple Silicon needs root and reports only thermal pressure, so the follow-up
+was read with `macmon` 0.8.2 (Homebrew formula, sudo-less, per-cluster averages), five samples
+two seconds apart. NoSleep's Indefinite session was still active with both assertions held.
+
+| Reading | Before (screenshot) | After (macmon, 5 samples) |
+|---|---|---|
+| Average CPU | 78.8 °C (173.9 °F) | 45.2 °C (113.3 °F), range 44.8–45.5 |
+| Hottest CPU core | 89.2 °C (192.5 °F) | not exposed by macmon |
+| Average GPU | 61.7 °C (143.0 °F) | 46.1 °C (115.0 °F), range 45.8–46.4 |
+| CPU package power | — | 0.8–1.8 W |
+| Whole-system power | — | 9–18 W |
+| Fans | — | 0 rpm, both (max 5777) |
+| CPU usage (macmon) | — | 0.2 % |
+| Battery estimate | 3 h 43 min left at 90 % (10:12) | 6 h 15 min left at 82 % (10:42) |
+
+CPU average down 34 °C, GPU down 16 °C, fans stopped, and the battery estimate nearly doubled
+with the same sleep assertions in place. `pmset -g therm` still shows no thermal or performance
+warning. Raw samples: `~/tmp/nosleep-investigation/macmon-1044.jsonl`.
+
+Re-check command:
+
+```bash
+macmon pipe -s 5 -i 2000 | python3 -c 'import json,sys; [print(round(json.loads(l)["temp"]["cpu_temp_avg"],1), "C") for l in sys.stdin]'
+```
+
 ### Conclusion
 
 Verdict unchanged: NoSleep is not a defect and its own footprint is nil. Corrected attribution
 for this machine: the heat came from three runaway Python heredoc scripts left over from another
 project, three performance cores pinned for about 4.6 days. NoSleep's Indefinite session
 contributed only by keeping the Mac awake, so the loops kept running instead of pausing at idle
-sleep.
+sleep. The temperature drop after the kill, measured with the session still active, confirms it.
 
 ### Lessons
 
