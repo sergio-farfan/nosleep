@@ -137,19 +137,19 @@ processes each holding a core at 100 %:
 
 | PID | Command | Started | CPU time at 10:12 | Working directory |
 |---|---|---|---|---|
-| 50754 | `python3 -` (Homebrew Python 3.14.7) | Thu 17 Sep 17:34 | 112 h 29 min | `/private/tmp/oci-guidelines/drawio_txt` |
-| 82488 | `python3 -` | Thu 17 Sep 19:34 | 110 h 28 min | `/private/tmp/c11_work` |
-| 11857 | `python3 -` | Thu 17 Sep 19:46 | 110 h 16 min | `/private/tmp/oci-guidelines` |
+| 50754 | `python3 -` (Homebrew Python 3.14.7) | Thu 17 Sep 17:34 | 112 h 29 min | scratch dir under `/private/tmp`, unrelated project |
+| 82488 | `python3 -` | Thu 17 Sep 19:34 | 110 h 28 min | scratch dir under `/private/tmp`, unrelated project |
+| 11857 | `python3 -` | Thu 17 Sep 19:46 | 110 h 16 min | scratch dir under `/private/tmp`, unrelated project |
 
 - Parent pid was 1 (launchd): the shells that started them were gone, nothing was waiting on
   them.
 - stdin was an unlinked zsh heredoc temp file; stdout/stderr an unlinked task-output file of a
-  finished Claude Code session in the `oci-drawio` OCI-Diagrams repository. The script text is
-  therefore no longer recoverable.
+  finished automation session belonging to an unrelated project. The script text is therefore
+  no longer recoverable.
 - `sample 50754 2`: every sample inside `_PyEval_EvalFrameDefault` → `PyFloat_FromString` →
   `_Py_dg_strtod`, no syscalls, no waits. A tight loop parsing floats (draw.io geometry), not slow
   I/O.
-- No Claude session for that repository was alive; the three were orphans.
+- No session for that project was alive; the three were orphans.
 
 ### NoSleep at the same moment
 
