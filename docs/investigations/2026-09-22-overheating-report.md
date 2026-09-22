@@ -1,11 +1,34 @@
-# Can NoSleep overheat a Mac? CPU and thermal check — 2026-09-22
+# Investigation: suspected overheating caused by NoSleep — 2026-09-22
 
-Question asked after the 1.2.0 improvements landed: can NoSleep cause a machine to overheat,
-and did any of the recent code changes introduce something that could?
+**Status:** closed — not a defect. No code path in NoSleep can generate sustained CPU load;
+the heat observed came from unrelated system daemons that the (intended) sleep prevention
+allowed to keep running.
 
-**Answer: no.** NoSleep does no continuous work, its own CPU use is effectively zero, and the
-1.2.0 changes made it lighter than 1.1.0. What it does by design is keep the Mac awake and the
-display on, so whatever else is running keeps running instead of pausing for sleep.
+## Report
+
+A machine running NoSleep 1.2.0 felt hot. Because 1.2.0 shipped a large set of changes (the
+code-review fixes, the `@Observable` migration, the single-instance lock, menu-open observers,
+the `-w` caffeinate flag), the question was whether any of them introduced a busy loop, a
+runaway timer or some other continuous work.
+
+## Suspects considered
+
+| Suspect | Introduced in | Could it burn CPU continuously? |
+|---|---|---|
+| 1 Hz countdown timer (`.common` run-loop mode) | 1.1.0, reworked in 1.2.0 | Only during a *timed* session; recomputes one integer per tick. Absent for Indefinite. |
+| `@Observable` migration | 1.2.0 | Removes the per-second status-item redraw that cost ~2 % CPU in 1.1.0. |
+| Single-instance lock (`O_EXLOCK`) | 1.2.0 | Taken once at launch; the kernel holds it. |
+| Menu-open observers (login item, notification permission) | 1.2.0 | Run only when the menu opens. |
+| Pre-lock instance sweep (`NSRunningApplication`, `pkill -P`) | 1.2.0 | Runs once at launch. |
+| `caffeinate -d -i -w <pid>` child | `-w` added in 1.2.0 | caffeinate blocks in a wait; no polling. |
+| Sleep prevention itself | 1.0 | Not CPU, but keeps the Mac (and other processes) running — see "by design" below. |
+
+## Method
+
+Live measurement on the reporting machine (macOS 27, NoSleep 1.2.0 installed via Homebrew,
+an Indefinite session active) with `ps`, `top -pid`, `pmset -g assertions`, `pmset -g therm`
+and a whole-machine `top -o cpu`, plus a code read of every path that could run without user
+interaction. Commands are listed at the end so the check can be repeated.
 
 ## Measurements (macOS 27, NoSleep 1.2.0 installed via Homebrew, Indefinite session active)
 
@@ -30,7 +53,9 @@ Top CPU consumers on the machine at the same moment, none of them NoSleep:
 A second `caffeinate -i -t 300` was also running; it belonged to a Claude Code session on the
 machine, not to NoSleep.
 
-## Why the code cannot generate heat
+## Findings
+
+### Why the code cannot generate heat
 
 - **Indefinite sessions run no timer.** `CaffeinateManager.start(duration:)` creates the
   1 Hz countdown timer only for timed presets. With Indefinite selected the process is fully
@@ -47,7 +72,7 @@ machine, not to NoSleep.
 - **No busy loops, no background threads of our own.** Three threads total: the main thread
   plus two system-owned ones.
 
-## What NoSleep does by design that affects temperature
+### What NoSleep does by design that affects temperature
 
 `caffeinate -d -i` holds two power assertions: prevent idle *system* sleep and prevent idle
 *display* sleep. Consequences, unchanged since 1.0:
@@ -58,6 +83,14 @@ machine, not to NoSleep.
 - The display stays on for the whole session, which adds its own heat and battery draw. The
   README's *Limitations* section documents this and suggests short presets on battery.
 - An Indefinite session extends both effects until you stop it.
+
+## Verdict
+
+Not a bug. NoSleep's own footprint is 54 s of CPU over 8 days and 0.0 % during an active
+session; the 1.2.0 changes lowered it. The reported heat is attributable to `softwareupdated`,
+`duetexpertd` and `WindowServer` running while the Mac was held awake — the behaviour the app
+exists to provide. No code change is warranted. The one user-facing lever is documented in the
+README's *Limitations*: prefer timed presets, and expect the display to stay on.
 
 ## If the Mac feels hot while NoSleep is active
 

@@ -204,6 +204,7 @@ nosleep/
 │   ├── dmg-background*.png        # DMG window background (generated)
 │   └── screenshot1.png            # README screenshot
 ├── docs/
+│   ├── investigations/            # Bug investigations (e.g. the 2026-09-22 overheating report)
 │   ├── reviews/                   # Code review reports
 │   └── superpowers/               # Design spec + implementation plan (v1.1.0)
 ├── .github/workflows/
