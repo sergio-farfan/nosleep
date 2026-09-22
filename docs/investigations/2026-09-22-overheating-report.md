@@ -1,8 +1,9 @@
 # Investigation: suspected overheating caused by NoSleep — 2026-09-22
 
-**Status:** closed — not a defect. No code path in NoSleep can generate sustained CPU load;
-the heat observed came from unrelated system daemons that the (intended) sleep prevention
-allowed to keep running.
+**Status:** closed — not a defect. No code path in NoSleep can generate sustained CPU load.
+The heat came from other processes that the (intended) sleep prevention allowed to keep
+running; on the machine measured in the addendum below it was three runaway Python scripts,
+each pinning a performance core for 4.6 days. See *Addendum* at the end.
 
 ## Report
 
@@ -110,3 +111,91 @@ pgrep -P "$P" -lf caffeinate                                     # the child, wh
 pmset -g assertions | grep -iE 'nosleep|caffeinate'              # the two assertions it holds
 pmset -g therm                                                   # macOS thermal / performance warnings
 ```
+
+## Addendum — 2026-09-22 10:20, second measurement with a temperature readout
+
+### Trigger
+
+A sensor readout taken while the Mac felt hot (values converted from °F):
+
+| Sensor | Reading |
+|---|---|
+| Hottest CPU core (performance core 6) | 89 °C (192.5 °F) |
+| Average CPU | 79 °C (173.9 °F) |
+| Performance cores 1–8 | 80–89 °C |
+| Efficiency cores 1–2 | 68–69 °C |
+| Average GPU | 62 °C (143.0 °F) |
+| Airflow left / right | 54 °C / 52 °C |
+
+Pattern: performance cores hot, efficiency cores and GPU cool. That is sustained compute on a
+few P-cores, not graphics and not a whole-machine load.
+
+### What was found
+
+Whole-machine `top -o cpu` showed a load average of 9.3 on an otherwise idle desktop and three
+processes each holding a core at 100 %:
+
+| PID | Command | Started | CPU time at 10:12 | Working directory |
+|---|---|---|---|---|
+| 50754 | `python3 -` (Homebrew Python 3.14.7) | Thu 17 Sep 17:34 | 112 h 29 min | `/private/tmp/oci-guidelines/drawio_txt` |
+| 82488 | `python3 -` | Thu 17 Sep 19:34 | 110 h 28 min | `/private/tmp/c11_work` |
+| 11857 | `python3 -` | Thu 17 Sep 19:46 | 110 h 16 min | `/private/tmp/oci-guidelines` |
+
+- Parent pid was 1 (launchd): the shells that started them were gone, nothing was waiting on
+  them.
+- stdin was an unlinked zsh heredoc temp file; stdout/stderr an unlinked task-output file of a
+  finished Claude Code session in the `oci-drawio` OCI-Diagrams repository. The script text is
+  therefore no longer recoverable.
+- `sample 50754 2`: every sample inside `_PyEval_EvalFrameDefault` → `PyFloat_FromString` →
+  `_Py_dg_strtod`, no syscalls, no waits. A tight loop parsing floats (draw.io geometry), not slow
+  I/O.
+- No Claude session for that repository was alive; the three were orphans.
+
+### NoSleep at the same moment
+
+Mac16,5 (Apple M4 Max), macOS 26.7, NoSleep 1.2.0 from the Homebrew cask, Indefinite session
+active for 59 h, on battery at 90 %.
+
+| Metric | Value |
+|---|---|
+| Process uptime | 2 d 11 h |
+| Cumulative CPU time | 3.6 s |
+| CPU over a 10 s `top -pid` sample | 0.0 %; context-switch counter unchanged; 3 threads |
+| `caffeinate -d -i -w 45451` child | 0.05 s CPU total |
+| `pmset -g therm` | no thermal or performance warning |
+| Unified log, `thermalmonitord`, last 3 h | no entries |
+
+Code re-read confirmed the analysis above: the only timer in `CaffeinateManager` is created for
+timed presets, and the stored preference was Indefinite (`selectedDuration = 0`), so this process
+had no timer at all.
+
+### Note on the earlier measurements
+
+The figures in the *Measurements* section above (NoSleep uptime 8 d 9 h, macOS 27) cannot have
+been taken on this Mac: its host uptime is 7 d 12 h and the NoSleep process here is 2 d 11 h old
+on macOS 26.7. They were taken on a different machine or are in error. If that machine also runs
+hot, repeat the `top -o cpu` check there before attributing anything to NoSleep.
+
+### Action taken
+
+`kill 50754 82488 11857` at 10:19. All three exited on SIGTERM. Instantaneous CPU idle rose from
+38–55 % to 73 % within ten seconds; the 1/5/15-minute load averages trail and need several minutes
+to fall.
+
+### Conclusion
+
+Verdict unchanged: NoSleep is not a defect and its own footprint is nil. Corrected attribution
+for this machine: the heat came from three runaway Python heredoc scripts left over from another
+project, three performance cores pinned for about 4.6 days. NoSleep's Indefinite session
+contributed only by keeping the Mac awake, so the loops kept running instead of pausing at idle
+sleep.
+
+### Lessons
+
+1. The first check when the Mac is hot with NoSleep active remains `top -o cpu`. The tell for a
+   runaway is CPU time in the hundreds of hours on a process whose parent is pid 1.
+2. Background `python3 - <<EOF` tasks launched from a tool session outlive the session if they
+   never finish. Give such scripts a hard bound (an iteration cap or `timeout`) and run
+   `pgrep -lf 'Python -$'` when a session ends.
+3. Those scripts ran with a `/private/tmp` working directory, which the standing rule for this
+   machine forbids; `~/tmp/<purpose>/` is the required location.
